@@ -1,0 +1,7 @@
+{
+  "name": "Voice Agent - Gemini Live",
+  "description": "A browser-based Voice AI orchestrator dashboard simulating Vapi.ai functionality using the Google Gemini Live API for ultra-low latency voice-to-voice interactions.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}

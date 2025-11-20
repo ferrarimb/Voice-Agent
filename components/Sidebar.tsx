@@ -1,0 +1,62 @@
+import React from 'react';
+import { Phone, Settings, Activity, Bot, PhoneCall } from 'lucide-react';
+import { View } from '../types';
+
+interface SidebarProps {
+  currentView: View;
+  onViewChange: (view: View) => void;
+}
+
+const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange }) => {
+  return (
+    <div className="w-16 md:w-64 h-screen bg-slate-900 border-r border-slate-800 flex flex-col">
+      <div className="p-4 flex items-center gap-3 border-b border-slate-800 h-16">
+        <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white">
+            <PhoneCall size={20} />
+        </div>
+        <span className="text-white font-bold text-xl hidden md:block">Voice Agent</span>
+      </div>
+
+      <nav className="flex-1 py-6 space-y-2 px-2">
+        <SidebarItem 
+          icon={<Bot size={20} />} 
+          label="Assistants" 
+          active={currentView === 'assistants'} 
+          onClick={() => onViewChange('assistants')}
+        />
+        <SidebarItem 
+          icon={<Phone size={20} />} 
+          label="Phone Numbers" 
+          active={currentView === 'phone'} 
+          onClick={() => onViewChange('phone')}
+        />
+        <SidebarItem 
+          icon={<Activity size={20} />} 
+          label="Logs" 
+          active={currentView === 'logs'} 
+          onClick={() => onViewChange('logs')}
+        />
+        <SidebarItem 
+          icon={<Settings size={20} />} 
+          label="Settings" 
+          active={currentView === 'settings'} 
+          onClick={() => onViewChange('settings')}
+        />
+      </nav>
+    </div>
+  );
+};
+
+const SidebarItem: React.FC<{ icon: React.ReactNode; label: string; active?: boolean; onClick: () => void }> = ({ icon, label, active, onClick }) => {
+  return (
+    <div 
+      onClick={onClick}
+      className={`flex items-center gap-3 px-3 py-2 rounded-md cursor-pointer transition-colors ${active ? 'bg-blue-600/10 text-blue-400' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-100'}`}
+    >
+      {icon}
+      <span className="hidden md:block font-medium">{label}</span>
+    </div>
+  );
+};
+
+export default Sidebar;
