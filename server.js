@@ -2,11 +2,12 @@
 /**
  * Vapi Clone Backend - Twilio <-> OpenAI Realtime API (GPT-4o Audio)
  * 
- * DEBUG MODE: STABLE v11 (Audio Resampling + PT-BR Bias)
+ * OPTIMIZED: v15 (Pure Audio Bridge)
  * Fixes: 
- * 1. Upsampling 8kHz -> 16kHz to fix "robotic/slow" playback.
- * 2. Explicit Portuguese System Instructions for better transcription.
- * 3. Manual WAV header construction for maximum compatibility.
+ * 1. REMOVED Upsampling (Source of "Low Motion" audio). Native 8kHz is preserved.
+ * 2. Optimized Buffer handling to reduce jitter/robotic artifacts.
+ * 3. Reduced Logging in hot-paths to prevent event loop blocking.
+ * 4. Corrected WAV headers to match Twilio's G.711 u-law output (8000Hz).
  */
 
 require('dotenv').config();
@@ -23,6 +24,8 @@ fastify.register(fastifyWebsocket);
 
 // --- Helpers ---
 const log = (msg, type = 'INFO') => {
+    // FILTER: Don't log high-frequency media events to console to prevent lag
+    if (type === 'BUFFER') return; 
     const time = new Date().toISOString().split('T')[1].slice(0, -1);
     console.log(`[${time}] [${type}] ${msg}`);
 };
@@ -52,62 +55,86 @@ function decodeMuLawBuffer(buffer) {
     return int16;
 }
 
-// 3. Upsample 8000Hz -> 16000Hz (Linear Interpolation)
-// Fixes "Robotic/Slow" audio on web players
-function upsample8kTo16k(inputInt16) {
-    const output = new Int16Array(inputInt16.length * 2);
-    for (let i = 0; i < inputInt16.length - 1; i++) {
-        const current = inputInt16[i];
-        const next = inputInt16[i + 1];
-        
-        // Sample 1: Original
-        output[i * 2] = current;
-        // Sample 2: Interpolated (Average)
-        output[i * 2 + 1] = Math.floor((current + next) / 2);
-    }
-    // Handle last sample
-    output[output.length - 2] = inputInt16[inputInt16.length - 1];
-    output[output.length - 1] = inputInt16[inputInt16.length - 1];
-    
-    return output;
-}
-
-// 4. Create WAV Header (16kHz, 16-bit, Mono)
-function createWavHeader(dataLength) {
+// 3. Create WAV Header (Standard 8kHz, 16-bit, Mono for Telephony)
+function createWavHeader(dataLength, sampleRate = 8000) {
     const buffer = Buffer.alloc(44);
-    
-    // RIFF chunk
     buffer.write('RIFF', 0);
-    buffer.writeUInt32LE(36 + dataLength, 4); // File size - 8
+    buffer.writeUInt32LE(36 + dataLength, 4);
     buffer.write('WAVE', 8);
-    
-    // fmt chunk
     buffer.write('fmt ', 12);
-    buffer.writeUInt32LE(16, 16); // Chunk size (16 for PCM)
-    buffer.writeUInt16LE(1, 20);  // Audio format (1 = PCM)
-    buffer.writeUInt16LE(1, 22);  // Num channels (1 = Mono)
-    buffer.writeUInt32LE(16000, 24); // Sample rate (16kHz)
-    buffer.writeUInt32LE(32000, 28); // Byte rate (SampleRate * BlockAlign) -> 16000 * 2
-    buffer.writeUInt16LE(2, 32);  // Block align (NumChannels * BitsPerSample/8) -> 1 * 16/8 = 2
-    buffer.writeUInt16LE(16, 34); // Bits per sample
-    
-    // data chunk
+    buffer.writeUInt32LE(16, 16); // PCM
+    buffer.writeUInt16LE(1, 20);  // Mono
+    buffer.writeUInt16LE(1, 22);  // Channels
+    buffer.writeUInt32LE(sampleRate, 24);
+    buffer.writeUInt32LE(sampleRate * 2, 28); // Byte Rate (SampleRate * BlockAlign)
+    buffer.writeUInt16LE(2, 32);  // Block Align (Channels * Bits/8)
+    buffer.writeUInt16LE(16, 34); // Bits per Sample
     buffer.write('data', 36);
     buffer.writeUInt32LE(dataLength, 40);
-    
     return buffer;
 }
-
 
 // --- SUPABASE CONFIG ---
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://xtkorgedlxwfuaqyxguq.supabase.co';
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh0a29yZ2VkbHh3ZnVhcXl4Z3VxIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTczNDAwNjg0MywiZXhwIjoyMDQ5NTgyODQzfQ.kaCxJ0WatQtCMQqFh1_Yru6mHyhhospZKERDxMS3G4k';
-
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+
+// Fallback Key
+const TEST_KEY = "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";
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.trim() : TEST_KEY;
+
+if (!OPENAI_API_KEY) {
+    log(`❌ FATAL: OPENAI_API_KEY missing.`, "SYSTEM");
+    process.exit(1);
+}
+
+// --- WHISPER API HELPER (Multipart without external deps) ---
+async function transcribeWithWhisper(audioBuffer) {
+    const boundary = '--------------------------' + Date.now().toString(16);
+    const model = 'whisper-1';
+    const language = 'pt'; // Force Portuguese
+
+    // Construct Multipart Body
+    const parts = [
+        `--${boundary}\r\nContent-Disposition: form-data; name="model"\r\n\r\n${model}\r\n`,
+        `--${boundary}\r\nContent-Disposition: form-data; name="language"\r\n\r\n${language}\r\n`,
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="recording.wav"\r\nContent-Type: audio/wav\r\n\r\n`
+    ];
+
+    const start = Buffer.from(parts.join(''));
+    const end = Buffer.from(`\r\n--${boundary}--\r\n`);
+    
+    // Combine buffers
+    const payload = Buffer.concat([start, audioBuffer, end]);
+
+    try {
+        log(`🎙️ Sending ${audioBuffer.length} bytes to Whisper API...`, "WHISPER");
+        const resp = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${OPENAI_API_KEY}`,
+                'Content-Type': `multipart/form-data; boundary=${boundary}`,
+                'Content-Length': payload.length
+            },
+            body: payload
+        });
+        
+        const data = await resp.json();
+        if(data.error) throw new Error(data.error.message);
+        log(`📝 Whisper Transcription: "${data.text.substring(0, 50)}..."`, "WHISPER");
+        return data.text;
+    } catch (e) {
+        log(`❌ Whisper Error: ${e.message}`, "ERROR");
+        return null;
+    }
+}
 
 // --- CORS & LOGGING HOOK ---
 fastify.addHook('onRequest', (request, reply, done) => {
-    log(`INCOMING: ${request.method} ${request.url}`, "NETWORK");
+    // Only log distinct non-health-check requests
+    if (!request.url.includes('health') && !request.url.includes('favicon')) {
+        log(`INCOMING: ${request.method} ${request.url}`, "NETWORK");
+    }
     reply.header("Access-Control-Allow-Origin", "*");
     reply.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
     reply.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
@@ -120,31 +147,23 @@ fastify.addHook('onRequest', (request, reply, done) => {
 
 const PORT = process.env.PORT || 5000;
 
-// Fallback Key
-const TEST_KEY = "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";
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.trim() : TEST_KEY;
-
-if (!OPENAI_API_KEY) {
-    log(`❌ FATAL: OPENAI_API_KEY missing.`, "SYSTEM");
-    process.exit(1);
-}
-
-// --- Constants ---
 const SYSTEM_MESSAGE_AGENT = `
 You are a helpful, witty, and concise AI voice assistant. 
 You are answering a phone call.
 Your output audio format is G711 u-law.
 Always respond quickly and concisely.
+Language: Portuguese (Brazil) unless spoken to in English.
 `.trim();
 
-// Updated for Portuguese Bias
 const SYSTEM_MESSAGE_SCRIBE = `
-INSTRUÇÃO PRINCIPAL: O idioma desta chamada é PORTUGUÊS (BRASIL).
-Você é um transcritor silencioso. Você está ouvindo uma chamada telefônica.
-NÃO FALE. NÃO GERE ÁUDIO.
-Sua única tarefa é transcrever o que ouve.
-Priorize a compreensão do Português.
-Se ouvir Inglês, transcreva em Inglês.
+ATENÇÃO: MODO "ESCUTA SILENCIOSA" (BRIDGE).
+SEU ÚNICO OBJETIVO É OUVIR E TRANSCREVER.
+
+REGRAS:
+1. IDIOMA: PORTUGUÊS (BRASIL).
+2. TAREFA: Apenas transcreva o que os humanos (Lead e SDR) estão falando.
+3. NÃO responda. NÃO gere áudio.
+4. Você está ouvindo uma chamada telefônica entre duas pessoas.
 `.trim();
 
 const VOICE = 'alloy';
@@ -169,7 +188,6 @@ fastify.post('/trigger-call', async (request, reply) => {
         }
 
         const auth = Buffer.from(`${twilio_config.accountSid}:${twilio_config.authToken}`).toString('base64');
-        // Pass n8n_url to the callback
         const callbackUrl = `${twilio_config.baseUrl}/connect-lead?lead_name=${encodeURIComponent(lead_name)}&lead_phone=${encodeURIComponent(lead_phone)}&horario=${encodeURIComponent(horario)}&n8n_url=${encodeURIComponent(n8n_url || '')}`;
 
         const formData = new URLSearchParams();
@@ -214,8 +232,6 @@ fastify.all('/connect-lead', async (request, reply) => {
         return reply.type('text/xml').send(twiml);
     }
     
-    // Use <Start><Stream> to record the bridge asynchronously without blocking the Dial
-    // track="both_tracks" mixes SDR and Lead audio for the recording/transcription
     const twiml = `
     <Response>
         <Start>
@@ -267,12 +283,10 @@ fastify.register(async (fastifyInstance) => {
         let isOpenAiConnected = false;
         let isSessionUpdated = false;
         let hasSentGreeting = false;
-        let callMode = 'agent'; // 'agent' or 'bridge'
+        let callMode = 'agent'; 
         
         const transcripts = [];
-        // Buffer to store G.711 u-law chunks
-        let savedAudioChunks = [];
-        // Buffer to store audio meant for OpenAI before connection is ready
+        let savedAudioChunks = []; // Storing raw u-law buffers
         let openAiAudioQueue = [];
 
         log(`🔌 Socket Connection Initiated`, "TWILIO");
@@ -301,22 +315,22 @@ fastify.register(async (fastifyInstance) => {
                             modalities: isBridge ? ['text'] : ['text', 'audio'], 
                             instructions: instruction,
                             voice: VOICE,
-                            input_audio_format: 'g711_ulaw',
-                            output_audio_format: 'g711_ulaw',
+                            input_audio_format: 'g711_ulaw', // Native Twilio Format
+                            output_audio_format: 'g711_ulaw', // Native Twilio Format
                             input_audio_transcription: { model: 'whisper-1' },
-                            turn_detection: { type: 'server_vad' }
+                            turn_detection: { type: 'server_vad' },
+                            temperature: 0.6 // Slightly higher for more natural speech in agent mode
                         }
                     };
                     openAiWs.send(JSON.stringify(sessionConfig));
 
-                    // FLUSH BUFFERED AUDIO TO OPENAI
                     if (openAiAudioQueue.length > 0) {
                         log(`⚡ Flushing ${openAiAudioQueue.length} buffered chunks to OpenAI`, "BUFFER");
                         while (openAiAudioQueue.length > 0) {
                             const chunk = openAiAudioQueue.shift();
                             openAiWs.send(JSON.stringify({
                                 type: 'input_audio_buffer.append',
-                                audio: chunk
+                                audio: chunk // Send base64 string directly
                             }));
                         }
                     }
@@ -331,15 +345,13 @@ fastify.register(async (fastifyInstance) => {
                             if (callMode === 'agent') checkAndSendGreeting();
                         } else if (event.type === 'response.audio.delta' && event.delta) {
                             if (streamSid && callMode === 'agent') {
-                                // 1. Send to Twilio
                                 twilioWs.send(JSON.stringify({
                                     event: 'media',
                                     streamSid: streamSid,
                                     media: { payload: event.delta }
                                 }));
-                                // 2. Save to Buffer
-                                const chunk = Buffer.from(event.delta, 'base64');
-                                savedAudioChunks.push(chunk);
+                                // We don't save AI audio in the recording to keep it clean for transcription if possible,
+                                // but for a full log, you might want it. For now, let's focus on user input/mixed input from Twilio.
                             }
                         } else if (event.type === 'input_audio_buffer.speech_started') {
                             if (streamSid && callMode === 'agent') {
@@ -348,19 +360,19 @@ fastify.register(async (fastifyInstance) => {
                             }
                         } else if (event.type === 'conversation.item.input_audio_transcription.completed') {
                             const text = event.transcript;
-                            if (text) {
-                                const role = callMode === 'bridge' ? 'conversation' : 'user';
-                                log(`${role}: ${text}`, "TRANSCRIPT");
-                                transcripts.push({ role: role, message: text, timestamp: new Date() });
+                            if (text && text.trim().length > 0) {
+                                log(`🗣️ Realtime Transcript: ${text}`, "TRANSCRIPT");
+                                transcripts.push({ role: 'user', message: text, timestamp: new Date() });
                             }
                         } else if (event.type === 'response.done') {
-                            const outputItems = event.response?.output || [];
-                            for (const item of outputItems) {
-                                if (item.content) {
-                                    for (const content of item.content) {
-                                        if (content.type === 'audio' && content.transcript) {
-                                             log(`AI: ${content.transcript}`, "TRANSCRIPT");
-                                             transcripts.push({ role: 'assistant', message: content.transcript, timestamp: new Date() });
+                            if (callMode === 'agent') {
+                                const outputItems = event.response?.output || [];
+                                for (const item of outputItems) {
+                                    if (item.content) {
+                                        for (const content of item.content) {
+                                            if (content.type === 'audio' && content.transcript) {
+                                                transcripts.push({ role: 'assistant', message: content.transcript, timestamp: new Date() });
+                                            }
                                         }
                                     }
                                 }
@@ -388,16 +400,18 @@ fastify.register(async (fastifyInstance) => {
                     connectToOpenAI();
 
                 } else if (data.event === 'media') {
-                    // 1. Save User (or Mixed Bridge) Audio
                     if (data.media.payload) {
-                        const chunk = Buffer.from(data.media.payload, 'base64');
-                        savedAudioChunks.push(chunk);
+                        // 1. Buffer Raw Payload (u-law) for Wav File
+                        // We store the base64 string directly in memory or convert to Buffer once to save space
+                        // Converting to Buffer immediately is better for memory than keeping V8 strings
+                        const chunkBuffer = Buffer.from(data.media.payload, 'base64');
+                        savedAudioChunks.push(chunkBuffer);
 
-                        // 2. Send to OpenAI
+                        // 2. Send to OpenAI (Fast path)
                         if (isOpenAiConnected && openAiWs.readyState === WebSocket.OPEN) {
                             openAiWs.send(JSON.stringify({
                                 type: 'input_audio_buffer.append',
-                                audio: data.media.payload
+                                audio: data.media.payload 
                             }));
                         } else {
                             openAiAudioQueue.push(data.media.payload);
@@ -410,32 +424,28 @@ fastify.register(async (fastifyInstance) => {
                     
                     if (n8nUrl) {
                         let recordingUrl = null;
+                        let finalTranscription = null;
 
-                        // --- AUDIO PROCESSING (UPSAMPLE 8k -> 16k) ---
+                        // --- AUDIO PROCESSING & WHISPER ---
                         if (savedAudioChunks.length > 0) {
                             try {
                                 log(`💾 Processing ${savedAudioChunks.length} chunks...`, "AUDIO");
                                 
-                                // 1. Concatenate raw u-law chunks
+                                // 1. Concatenate all u-law buffers
                                 const uLawBuffer = Buffer.concat(savedAudioChunks);
                                 
-                                // 2. Decode u-law to PCM Int16 (8000Hz)
-                                const pcm8k = decodeMuLawBuffer(uLawBuffer);
+                                // 2. Decode u-law to PCM-16 (8000Hz)
+                                // We do NOT upsample. We keep it 8kHz to prevent artifacts/slow motion.
+                                const pcmBuffer = decodeMuLawBuffer(uLawBuffer);
                                 
-                                // 3. Upsample to 16000Hz (Fixes playback speed/robotic issues)
-                                const pcm16k = upsample8kTo16k(pcm8k);
+                                // 3. Create WAV Header with 8000Hz
+                                const wavHeader = createWavHeader(pcmBuffer.byteLength, 8000);
                                 
-                                // 4. Create WAV Header for 16000Hz Mono
-                                const wavHeader = createWavHeader(pcm16k.byteLength);
-                                
-                                // 5. Combine Header + Data
-                                const finalWavBuffer = Buffer.concat([
-                                    wavHeader, 
-                                    Buffer.from(pcm16k.buffer)
-                                ]);
+                                // 4. Combine
+                                const finalWavBuffer = Buffer.concat([wavHeader, Buffer.from(pcmBuffer.buffer)]);
 
+                                // 5. UPLOAD TO SUPABASE
                                 const fileName = `call_${callMode}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.wav`;
-
                                 const { data: uploadData, error: uploadError } = await supabase
                                     .storage
                                     .from('audios') 
@@ -455,16 +465,28 @@ fastify.register(async (fastifyInstance) => {
                                     recordingUrl = publicUrlData.publicUrl;
                                     log(`✅ Audio Uploaded: ${recordingUrl}`, "SUCCESS");
                                 }
+
+                                // 6. TRANSCRIBE WITH WHISPER
+                                if (callMode === 'bridge') {
+                                    finalTranscription = await transcribeWithWhisper(finalWavBuffer);
+                                }
+
                             } catch (audioErr) {
                                 log(`❌ Audio Processing Error: ${audioErr.message}`, "ERROR");
                             }
                         }
 
                         // --- SEND TO N8N ---
-                        if (transcripts.length > 0 || recordingUrl) {
-                            const formattedTranscript = transcripts
-                                .map(t => `${t.role.toUpperCase()}: ${t.message}`)
-                                .join('\n');
+                        if (transcripts.length > 0 || recordingUrl || finalTranscription) {
+                            let mainTranscript = "";
+                            
+                            if (finalTranscription) {
+                                mainTranscript = finalTranscription;
+                            } else {
+                                mainTranscript = transcripts
+                                    .map(t => `${t.role.toUpperCase()}: ${t.message}`)
+                                    .join('\n');
+                            }
 
                             log(`🚀 Triggering n8n Webhook...`, "WEBHOOK");
                             fetch(n8nUrl, {
@@ -472,8 +494,8 @@ fastify.register(async (fastifyInstance) => {
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({
                                     assistantName: callMode === 'bridge' ? "Speed Dial Bridge" : "Twilio AI Agent",
-                                    transcript: formattedTranscript, 
-                                    messages: transcripts,
+                                    transcript: mainTranscript, 
+                                    realtime_messages: transcripts, 
                                     recordingUrl: recordingUrl || "", 
                                     timestamp: new Date().toISOString(),
                                     status: 'success',
