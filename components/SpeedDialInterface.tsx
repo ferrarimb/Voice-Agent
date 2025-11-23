@@ -1,23 +1,53 @@
-
 import React, { useState } from 'react';
-import { Zap, User, Phone, Clock, AlertTriangle, Play, CheckCircle2 } from 'lucide-react';
+import { Zap, User, Phone, Clock, AlertTriangle, Play, CheckCircle2, Loader2 } from 'lucide-react';
 import { TwilioConfig, CallLogEntry } from '../types';
+
+export interface SpeedDialState {
+  lead: { name: string; phone: string; context: string; };
+  sdrPhone: string;
+}
 
 interface SpeedDialInterfaceProps {
   onCallLog: (log: CallLogEntry) => void;
   n8nWebhookUrl?: string;
   twilioConfig: TwilioConfig;
+  savedState?: SpeedDialState;
+  onStateChange?: (state: SpeedDialState) => void;
 }
 
-const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({ onCallLog, n8nWebhookUrl, twilioConfig }) => {
-  const [lead, setLead] = useState({ name: '', phone: '', context: 'Imóvel Centro' });
-  const [sdrPhone, setSdrPhone] = useState(twilioConfig.fromNumber || '');
+const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({ 
+  onCallLog, 
+  n8nWebhookUrl, 
+  twilioConfig,
+  savedState,
+  onStateChange
+}) => {
+  const [localLead, setLocalLead] = useState({ name: '', phone: '', context: 'Imóvel Centro' });
+  const [localSdrPhone, setLocalSdrPhone] = useState(twilioConfig.fromNumber || '');
   const [isLoading, setIsLoading] = useState(false);
   const [status, setStatus] = useState<{ type: 'success' | 'error', msg: string } | null>(null);
 
+  // Use props if available, otherwise local state
+  const lead = savedState ? savedState.lead : localLead;
+  const sdrPhone = savedState ? savedState.sdrPhone : localSdrPhone;
+
+  const updateLead = (newLead: typeof lead) => {
+    if (onStateChange && savedState) {
+      onStateChange({ ...savedState, lead: newLead });
+    } else {
+      setLocalLead(newLead);
+    }
+  };
+
+  const updateSdrPhone = (newPhone: string) => {
+    if (onStateChange && savedState) {
+      onStateChange({ ...savedState, sdrPhone: newPhone });
+    } else {
+      setLocalSdrPhone(newPhone);
+    }
+  };
+
   const handleTrigger = async () => {
-    console.log("[Client DEBUG] Botão Disparar Pressionado");
-    
     if (!twilioConfig || !twilioConfig.accountSid) {
       setStatus({ type: 'error', msg: 'Please configure Twilio credentials in Settings first.' });
       return;
@@ -30,17 +60,14 @@ const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({ onCallLog, n8nW
     setIsLoading(true);
     setStatus(null);
 
-    // 1. Calcular Base URL de forma Robusta (usando classe URL)
     let backendUrl = 'http://localhost:5000/trigger-call';
     let originUrl = '';
 
     try {
-        // Tenta extrair a origem (protocolo + dominio) da URL salva
         const urlObj = new URL(twilioConfig.webhookUrl);
         originUrl = urlObj.origin; 
         backendUrl = `${originUrl}/trigger-call`;
     } catch (e) {
-        console.warn("Invalid Webhook URL format", e);
         if (twilioConfig.webhookUrl.includes('ngrok')) {
             backendUrl = `${twilioConfig.webhookUrl}/trigger-call`;
         }
@@ -60,8 +87,6 @@ const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({ onCallLog, n8nW
       }
     };
 
-    console.log(`[Client DEBUG] Fetching: ${backendUrl}`);
-
     try {
       const response = await fetch(backendUrl, {
         method: 'POST',
@@ -78,19 +103,18 @@ const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({ onCallLog, n8nW
            timestamp: new Date().toISOString(),
            type: 'pstn',
            status: 'success',
-           assistantName: 'Ponte SDR', // Renamed from Speed Dial Bridge
+           assistantName: 'Ponte SDR',
            to: lead.phone,
            from: sdrPhone,
-           errorMessage: 'Ponte Iniciada' // Renamed from Bridge Initiated
+           errorMessage: 'Ponte Iniciada'
         });
       } else {
         setStatus({ type: 'error', msg: data.error || 'Failed to trigger call.' });
       }
     } catch (e: any) {
-      console.error("[Client DEBUG] Erro no Fetch:", e);
       setStatus({ 
         type: 'error', 
-        msg: `Erro ao conectar no servidor (${backendUrl}). Verifique se o Ngrok está rodando.` 
+        msg: `Erro ao conectar no servidor. Verifique o console.` 
       });
     } finally {
       setIsLoading(false);
@@ -98,135 +122,140 @@ const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({ onCallLog, n8nW
   };
 
   return (
-    <div className="flex-1 bg-slate-950 h-screen overflow-y-auto">
-       <header className="h-16 border-b border-slate-800 bg-slate-900/50 flex items-center justify-between px-8 sticky top-0 backdrop-blur-sm z-10">
-        <div className="flex items-center gap-3">
-            <div className="p-2 bg-orange-500/10 rounded-lg text-orange-500">
-                <Zap size={20} />
+    <div className="flex-1 h-screen overflow-y-auto custom-scrollbar">
+       <header className="h-24 flex items-center justify-between px-10 sticky top-0 z-20 backdrop-blur-xl bg-transparent border-b border-white/5">
+        <div className="flex items-center gap-4">
+            <div className="w-10 h-10 rounded-full bg-orange-500/20 flex items-center justify-center border border-orange-500/30 shadow-[0_0_15px_rgba(249,115,22,0.3)]">
+                <Zap size={20} className="text-orange-400" />
             </div>
-            <h1 className="text-white font-semibold text-lg">Ponte SDR</h1>
+            <h1 className="text-white font-semibold text-2xl tracking-tight text-glow">Ponte SDR</h1>
         </div>
       </header>
 
-      <div className="p-8 max-w-6xl mx-auto">
+      <div className="p-10 max-w-6xl mx-auto space-y-8">
         
-        {/* Intro Box */}
-        <div className="bg-gradient-to-r from-slate-900 to-slate-800 border border-slate-700 rounded-xl p-6 mb-8 shadow-lg">
-            <div className="flex justify-between items-start">
+        {/* Intro Glass Box */}
+        <div className="glass-panel rounded-[2rem] p-8 relative overflow-hidden">
+            {/* Background Accent */}
+            <div className="absolute top-0 right-0 w-64 h-64 bg-orange-500/10 rounded-full blur-[80px] -translate-y-1/2 translate-x-1/2 pointer-events-none"></div>
+
+            <div className="flex justify-between items-start relative z-10">
                 <div>
-                    <h2 className="text-white font-medium mb-2 flex items-center gap-2">
-                        Como funciona?
+                    <h2 className="text-white text-xl font-medium mb-3 flex items-center gap-2">
+                        Speed-to-Lead
                     </h2>
-                    <p className="text-slate-400 text-sm leading-relaxed max-w-2xl">
+                    <p className="text-white/60 text-sm leading-relaxed max-w-2xl">
                         Este sistema conecta seu SDR ao Lead instantaneamente.
-                        1. O sistema liga primeiro para o <strong>SDR</strong>.
-                        2. Verifica se é humano (ignora Caixa Postal).
-                        3. "Sussurra" os dados do Lead no ouvido do SDR.
-                        4. Conecta a chamada ao <strong>Lead</strong>.
+                        <br/><br/>
+                        1. O sistema liga primeiro para o <strong className="text-white">SDR</strong>.
+                        <br/>
+                        2. "Sussurra" os dados do Lead no ouvido do SDR.
+                        <br/>
+                        3. Conecta a chamada ao <strong className="text-white">Lead</strong>.
                     </p>
                 </div>
                 <div className="hidden md:block">
-                   <div className="bg-slate-950 p-4 rounded-lg border border-slate-800">
-                      <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">Estado Atual</span>
-                      <div className="flex items-center gap-2 mt-2">
-                          <div className={`w-2 h-2 rounded-full ${twilioConfig.webhookUrl ? 'bg-green-500' : 'bg-red-500'}`}></div>
-                          <span className="text-sm text-slate-300">{twilioConfig.webhookUrl ? 'Ngrok Configurado' : 'Ngrok Pendente'}</span>
+                   <div className="glass-panel px-6 py-4 rounded-xl flex items-center gap-4">
+                      <div className={`w-3 h-3 rounded-full shadow-[0_0_10px_currentColor] ${twilioConfig.webhookUrl ? 'bg-emerald-500 text-emerald-500' : 'bg-red-500 text-red-500'}`}></div>
+                      <div>
+                        <span className="block text-[10px] font-bold text-white/40 uppercase tracking-widest">Tunnel Status</span>
+                        <span className="text-sm font-medium text-white">{twilioConfig.webhookUrl ? 'Active' : 'Disconnected'}</span>
                       </div>
                    </div>
                 </div>
             </div>
         </div>
 
-        <div className="max-w-2xl mx-auto">
+        <div className="max-w-3xl mx-auto">
             {/* Form Section */}
-            <div className="space-y-6">
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
-                    <h3 className="text-slate-300 font-medium border-b border-slate-800 pb-4 mb-4">Teste Manual (Frontend)</h3>
-                    
-                    <div className="space-y-4">
-                        <div className="space-y-2">
-                            <label className="text-xs font-medium text-slate-400">Nome do Lead</label>
-                            <div className="relative">
-                                <User className="absolute left-3 top-2.5 text-slate-500" size={16} />
-                                <input 
-                                    type="text" 
-                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg py-2 pl-10 pr-4 text-slate-200 outline-none focus:border-orange-500 transition"
-                                    placeholder="Ex: João Silva"
-                                    value={lead.name}
-                                    onChange={(e) => setLead({...lead, name: e.target.value})}
-                                />
-                            </div>
-                        </div>
-
-                        <div className="space-y-2">
-                            <label className="text-xs font-medium text-slate-400">Telefone do Lead</label>
-                            <div className="relative">
-                                <Phone className="absolute left-3 top-2.5 text-slate-500" size={16} />
-                                <input 
-                                    type="text" 
-                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg py-2 pl-10 pr-4 text-slate-200 outline-none focus:border-orange-500 transition"
-                                    placeholder="+55..."
-                                    value={lead.phone}
-                                    onChange={(e) => setLead({...lead, phone: e.target.value})}
-                                />
-                            </div>
-                        </div>
-
-                        <div className="space-y-2">
-                            <label className="text-xs font-medium text-slate-400">Interesse / Horário</label>
-                            <div className="relative">
-                                <Clock className="absolute left-3 top-2.5 text-slate-500" size={16} />
-                                <input 
-                                    type="text" 
-                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg py-2 pl-10 pr-4 text-slate-200 outline-none focus:border-orange-500 transition"
-                                    placeholder="Ex: 15:30"
-                                    value={lead.context}
-                                    onChange={(e) => setLead({...lead, context: e.target.value})}
-                                />
-                            </div>
-                        </div>
-
-                        <div className="pt-2">
-                            <label className="text-xs font-medium text-slate-400 block mb-2">Telefone do SDR (Você)</label>
-                            <div className="relative">
-                                <Phone className="absolute left-3 top-2.5 text-slate-500" size={16} />
-                                <input 
-                                    type="text" 
-                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg py-2 pl-10 pr-4 text-slate-200 outline-none focus:border-blue-500 transition"
-                                    placeholder="+55..."
-                                    value={sdrPhone}
-                                    onChange={(e) => setSdrPhone(e.target.value)}
-                                />
-                            </div>
+            <div className="glass-panel rounded-[2rem] p-10">
+                <h3 className="text-white/80 font-medium border-b border-white/10 pb-6 mb-8 flex items-center gap-2">
+                    <span className="w-1.5 h-6 bg-orange-500 rounded-full"></span>
+                    Teste Manual (Frontend)
+                </h3>
+                
+                <div className="space-y-6">
+                    <div className="space-y-2">
+                        <label className="text-xs uppercase font-bold tracking-widest text-white/30 ml-1">Nome do Lead</label>
+                        <div className="relative group">
+                            <User className="absolute left-4 top-3.5 text-white/30 group-focus-within:text-white/80 transition" size={18} />
+                            <input 
+                                type="text" 
+                                className="w-full glass-input rounded-xl py-3.5 pl-12 pr-4 text-sm font-medium placeholder:text-white/20"
+                                placeholder="Ex: João Silva"
+                                value={lead.name}
+                                onChange={(e) => updateLead({...lead, name: e.target.value})}
+                            />
                         </div>
                     </div>
 
-                    <div className="mt-6 space-y-4">
-                        {status && (
-                            <div className={`p-3 rounded-lg text-sm flex items-center gap-2 ${status.type === 'success' ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
-                                {status.type === 'success' ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
-                                {status.msg}
-                            </div>
+                    <div className="space-y-2">
+                        <label className="text-xs uppercase font-bold tracking-widest text-white/30 ml-1">Telefone do Lead</label>
+                        <div className="relative group">
+                            <Phone className="absolute left-4 top-3.5 text-white/30 group-focus-within:text-white/80 transition" size={18} />
+                            <input 
+                                type="text" 
+                                className="w-full glass-input rounded-xl py-3.5 pl-12 pr-4 text-sm font-medium placeholder:text-white/20"
+                                placeholder="+55..."
+                                value={lead.phone}
+                                onChange={(e) => updateLead({...lead, phone: e.target.value})}
+                            />
+                        </div>
+                    </div>
+
+                    <div className="space-y-2">
+                        <label className="text-xs uppercase font-bold tracking-widest text-white/30 ml-1">Contexto</label>
+                        <div className="relative group">
+                            <Clock className="absolute left-4 top-3.5 text-white/30 group-focus-within:text-white/80 transition" size={18} />
+                            <input 
+                                type="text" 
+                                className="w-full glass-input rounded-xl py-3.5 pl-12 pr-4 text-sm font-medium placeholder:text-white/20"
+                                placeholder="Ex: 15:30"
+                                value={lead.context}
+                                onChange={(e) => updateLead({...lead, context: e.target.value})}
+                            />
+                        </div>
+                    </div>
+
+                    <div className="pt-4">
+                        <label className="text-xs uppercase font-bold tracking-widest text-white/30 ml-1 block mb-2">SDR (Você)</label>
+                        <div className="relative group">
+                            <Phone className="absolute left-4 top-3.5 text-white/30 group-focus-within:text-blue-400 transition" size={18} />
+                            <input 
+                                type="text" 
+                                className="w-full glass-input rounded-xl py-3.5 pl-12 pr-4 text-sm font-medium placeholder:text-white/20 border-white/10 focus:border-blue-500/50"
+                                placeholder="+55..."
+                                value={sdrPhone}
+                                onChange={(e) => updateSdrPhone(e.target.value)}
+                            />
+                        </div>
+                    </div>
+                </div>
+
+                <div className="mt-10 space-y-4">
+                    {status && (
+                        <div className={`p-4 rounded-xl text-sm font-medium flex items-center gap-3 animate-in slide-in-from-top-2 ${status.type === 'success' ? 'glass-panel bg-emerald-500/10 text-emerald-300 border-emerald-500/20' : 'glass-panel bg-red-500/10 text-red-300 border-red-500/20'}`}>
+                            {status.type === 'success' ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
+                            {status.msg}
+                        </div>
+                    )}
+
+                    <button 
+                        onClick={handleTrigger}
+                        disabled={isLoading || !lead.phone || !sdrPhone}
+                        className="w-full py-4 glass-button bg-orange-600/20 hover:bg-orange-600/40 border-orange-500/30 text-white font-bold rounded-2xl shadow-[0_0_20px_rgba(249,115,22,0.1)] transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed group"
+                    >
+                        {isLoading ? (
+                            <span className="flex items-center gap-2"><Loader2 className="animate-spin" size={20} /> Connecting...</span>
+                        ) : (
+                            <>
+                                <Play size={20} fill="currentColor" className="group-hover:scale-110 transition-transform" /> Disparar Ponte Manual
+                            </>
                         )}
-
-                        <button 
-                            onClick={handleTrigger}
-                            disabled={isLoading || !lead.phone || !sdrPhone}
-                            className="w-full py-4 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-lg shadow-lg shadow-orange-900/20 transition flex items-center justify-center gap-2"
-                        >
-                            {isLoading ? (
-                                <span className="animate-pulse">Iniciando...</span>
-                            ) : (
-                                <>
-                                    <Play size={20} fill="currentColor" /> Disparar Ponte Manual
-                                </>
-                            )}
-                        </button>
-                    </div>
+                    </button>
                 </div>
             </div>
         </div>
-
       </div>
     </div>
   );

@@ -17,23 +17,18 @@ const ActiveCallModal: React.FC<ActiveCallModalProps> = ({ config, onClose }) =>
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    // Check for API key
     const checkKey = async () => {
-        if (!(window as any).aistudio) {
-            // Fallback if running outside standard ai studio environment shim
-        }
+        if (!(window as any).aistudio) { }
 
         try {
              if ((window as any).aistudio && !(await (window as any).aistudio.hasSelectedApiKey())) {
                 await (window as any).aistudio.openSelectKey();
             }
         } catch (e) {
-            console.warn("AI Studio Key selection skipped/failed", e);
+            console.warn("AI Studio Key selection skipped", e);
         }
-        
         initService();
     }
-    
     checkKey();
     
     return () => {
@@ -57,9 +52,7 @@ const ActiveCallModal: React.FC<ActiveCallModalProps> = ({ config, onClose }) =>
   };
 
   const handleHangup = () => {
-    if (serviceRef.current) {
-      serviceRef.current.stop();
-    }
+    if (serviceRef.current) serviceRef.current.stop();
     onClose(logs);
   };
 
@@ -69,89 +62,86 @@ const ActiveCallModal: React.FC<ActiveCallModalProps> = ({ config, onClose }) =>
     }
   }, [logs]);
 
-  // Visualizer rings
-  const ringScale = 1 + (volume * 2); 
+  // Visualizer Math
+  const scale = 1 + Math.min(volume * 6, 0.8); 
+  const glowOpacity = 0.4 + Math.min(volume * 4, 0.6);
+
+  // Get last message for display
+  const lastMsg = logs.length > 0 ? logs[logs.length - 1] : null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-4xl h-[80vh] flex overflow-hidden flex-col md:flex-row">
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      {/* Immersive Dark Glass Background */}
+      <div className="absolute inset-0 bg-black/80 backdrop-blur-3xl transition-all duration-700 animate-in fade-in"></div>
+
+      {/* Main Container */}
+      <div className="relative w-full h-full md:max-w-[480px] md:h-[800px] flex flex-col items-center justify-between p-10 z-10 md:rounded-[3rem] md:border md:border-white/10 md:shadow-2xl md:shadow-black/80 md:bg-black/40 overflow-hidden">
         
-        {/* Left Side: Visualizer */}
-        <div className="flex-1 flex flex-col items-center justify-center bg-gradient-to-b from-slate-900 to-slate-950 relative p-8 border-b md:border-b-0 md:border-r border-slate-800">
-           <button onClick={() => onClose(logs)} className="absolute top-4 left-4 text-slate-500 hover:text-white">
-             <X size={24} />
+        {/* Header */}
+        <div className="w-full flex justify-between items-center text-white/50 relative z-20">
+           <div className="flex items-center gap-3 glass-panel px-4 py-2 rounded-full">
+               <span className={`w-2 h-2 rounded-full ${status === 'connected' ? 'bg-emerald-400 shadow-[0_0_10px_#34d399]' : 'bg-yellow-400 animate-pulse'}`}></span>
+               <span className="text-[10px] font-bold tracking-widest uppercase">{status === 'connected' ? 'Live Call' : status}</span>
+           </div>
+           <button onClick={() => onClose(logs)} className="hover:text-white transition p-3 rounded-full hover:bg-white/10 glass-panel">
+               <X size={20} />
            </button>
-
-           <div className="text-center mb-8">
-              <h2 className="text-2xl font-bold text-white mb-2">{config.name}</h2>
-              <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                status === 'connected' ? 'bg-green-500/20 text-green-400' :
-                status === 'connecting' ? 'bg-yellow-500/20 text-yellow-400' :
-                'bg-red-500/20 text-red-400'
-              }`}>
-                {status === 'connected' ? 'Live' : status}
-              </span>
-           </div>
-
-           {/* Orb Visualizer */}
-           <div className="relative w-48 h-48 flex items-center justify-center mb-12">
-              <div 
-                className="absolute inset-0 bg-blue-500/20 rounded-full blur-xl transition-transform duration-75"
-                style={{ transform: `scale(${ringScale})` }}
-              ></div>
-              <div 
-                className="absolute inset-0 bg-blue-400/10 rounded-full transition-transform duration-100"
-                style={{ transform: `scale(${ringScale * 0.8})` }}
-              ></div>
-               <div className="w-32 h-32 bg-gradient-to-tr from-blue-600 to-indigo-500 rounded-full flex items-center justify-center shadow-inner shadow-white/20 z-10 relative overflow-hidden">
-                   <div className="absolute inset-0 opacity-50 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] mix-blend-overlay"></div>
-               </div>
-           </div>
-
-           <div className="flex gap-6">
-              <button 
-                onClick={() => setIsMicMuted(!isMicMuted)}
-                className={`p-4 rounded-full transition ${isMicMuted ? 'bg-red-500/20 text-red-400' : 'bg-slate-800 text-white hover:bg-slate-700'}`}
-              >
-                 {isMicMuted ? <MicOff size={24} /> : <Mic size={24} />}
-              </button>
-              <button 
-                onClick={handleHangup}
-                className="p-4 rounded-full bg-red-600 text-white hover:bg-red-700 transition shadow-lg shadow-red-900/30"
-              >
-                 <PhoneOff size={24} />
-              </button>
-           </div>
         </div>
 
-        {/* Right Side: Real-time Logs */}
-        <div className="w-full md:w-96 bg-slate-950 flex flex-col">
-           <div className="p-4 border-b border-slate-800 bg-slate-900/50">
-              <h3 className="font-semibold text-slate-200">Live Transcripts</h3>
+        {/* Central Orb (Siri Style) */}
+        <div className="relative flex-1 w-full flex flex-col items-center justify-center min-h-[400px]">
+           
+           {/* The Orb */}
+           <div className="relative w-64 h-64 flex items-center justify-center">
+              {/* Outer Glows */}
+              <div 
+                className="absolute inset-0 rounded-full bg-gradient-to-r from-blue-600 via-indigo-500 to-purple-600 blur-[80px] transition-all duration-100 ease-out will-change-transform"
+                style={{ opacity: glowOpacity, transform: `scale(${scale * 1.2})` }}
+              />
+              <div 
+                className="absolute inset-0 rounded-full bg-gradient-to-t from-cyan-400 to-blue-600 blur-[40px] mix-blend-screen transition-all duration-100 ease-out will-change-transform"
+                style={{ opacity: 0.8, transform: `scale(${scale})` }}
+              />
+              {/* Core */}
+              <div className="relative w-56 h-56 bg-black rounded-full flex items-center justify-center z-10 shadow-[inset_0_0_60px_rgba(255,255,255,0.2)] overflow-hidden">
+                   <div className="absolute inset-0 bg-gradient-to-br from-white/20 to-transparent opacity-50"></div>
+                   <div className="w-full h-full rounded-full bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-30 mix-blend-overlay"></div>
+                   {/* Inner spinning ring */}
+                   <div className="absolute inset-0 rounded-full border border-white/10 animate-[spin_10s_linear_infinite]"></div>
+              </div>
            </div>
-           <div className="flex-1 overflow-y-auto p-4 space-y-4" ref={scrollRef}>
-              {logs.length === 0 && (
-                <div className="text-center text-slate-600 mt-10 text-sm">
-                    Waiting for conversation to start...
-                </div>
+
+           {/* Dynamic Text Output (Subtitle style) */}
+           <div className="mt-16 min-h-[100px] w-full flex items-center justify-center px-4">
+              {lastMsg ? (
+                  <p className={`text-center font-medium text-xl leading-relaxed transition-all duration-300 animate-in slide-in-from-bottom-4 ${lastMsg.role === 'user' ? 'text-white' : 'text-transparent bg-clip-text bg-gradient-to-r from-blue-200 to-purple-200'}`}>
+                      "{lastMsg.message}"
+                  </p>
+              ) : (
+                  <p className="text-white/30 text-sm animate-pulse font-medium tracking-widest uppercase">Listening...</p>
               )}
-              {logs.map((log) => (
-                  <div key={log.id} className={`flex flex-col ${log.role === 'user' ? 'items-end' : 'items-start'}`}>
-                      <span className="text-[10px] uppercase text-slate-500 mb-1 font-bold tracking-wider">{log.role}</span>
-                      <div className={`p-3 rounded-lg text-sm max-w-[90%] ${
-                          log.role === 'user' 
-                          ? 'bg-blue-600/20 text-blue-100 border border-blue-500/30 rounded-tr-none' 
-                          : log.role === 'system'
-                          ? 'bg-slate-800 text-slate-400 border border-slate-700 w-full text-center italic'
-                          : 'bg-slate-800 text-slate-200 border border-slate-700 rounded-tl-none'
-                      }`}>
-                          {log.message}
-                      </div>
-                  </div>
-              ))}
            </div>
+
         </div>
 
+        {/* Controls */}
+        <div className="w-full flex justify-center gap-10 items-center pb-8 md:pb-4 relative z-20">
+            <button 
+                onClick={() => setIsMicMuted(!isMicMuted)}
+                className={`w-20 h-20 rounded-full flex items-center justify-center backdrop-blur-md transition-all duration-300 border border-white/10 shadow-lg ${isMicMuted ? 'bg-white text-black scale-105' : 'bg-white/5 text-white hover:bg-white/15'}`}
+            >
+                {isMicMuted ? <MicOff size={28} /> : <Mic size={28} />}
+            </button>
+            <button 
+                onClick={handleHangup}
+                className="w-24 h-24 rounded-full bg-red-500 text-white flex items-center justify-center shadow-[0_0_40px_rgba(239,68,68,0.4)] hover:scale-105 active:scale-95 transition-all duration-300 border border-red-400"
+            >
+                <PhoneOff size={36} fill="currentColor" />
+            </button>
+        </div>
+
+        {/* Hidden Log Saver (functional) */}
+        <div ref={scrollRef} className="hidden"></div>
       </div>
     </div>
   );

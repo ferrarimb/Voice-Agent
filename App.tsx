@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import AssistantConfigPanel from './components/AssistantConfig';
@@ -27,6 +26,20 @@ const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<View>('assistants');
   const [isCallActive, setIsCallActive] = useState(false);
   
+  // Speed Dial State Persistence
+  const [speedDialState, setSpeedDialState] = useState(() => {
+    const saved = localStorage.getItem('speed_dial_state');
+    return saved ? JSON.parse(saved) : {
+      lead: { name: '', phone: '', context: 'Imóvel Centro' },
+      sdrPhone: '' 
+    };
+  });
+
+  const handleSpeedDialChange = (newState: any) => {
+    setSpeedDialState(newState);
+    localStorage.setItem('speed_dial_state', JSON.stringify(newState));
+  };
+  
   // Load logs from local storage
   const [callLogs, setCallLogs] = useState<CallLogEntry[]>(() => {
     const savedLogs = localStorage.getItem('call_logs');
@@ -42,18 +55,18 @@ const App: React.FC = () => {
     };
   });
 
-  // Twilio Settings
+  // Twilio Settings - Pre-filled defaults as requested
   const [twilioConfig, setTwilioConfig] = useState<TwilioConfig>(() => {
     const savedConfig = localStorage.getItem('twilio_config');
     if (savedConfig) {
       return JSON.parse(savedConfig);
     }
-    // Default credentials for testing
+    // Specific Default credentials requested by user
     return {
       accountSid: 'AC3883d04e400fe1328cf490a389fa910a',
       authToken: '37bc166feaaa030b1fddfae5fbf188b8',
       fromNumber: '+5511993137410',
-      webhookUrl: 'https://uncandied-jeanene-pyruvic.ngrok-free.dev/incoming'
+      webhookUrl: 'https://uncandied-jeanene-pyruvic.ngrok-free.dev'
     };
   });
 
@@ -72,14 +85,10 @@ const App: React.FC = () => {
   };
 
   const handleSaveTwilioConfig = (newConfig: TwilioConfig) => {
-    // Smart Fix: Automatically append /incoming if missing
     let url = newConfig.webhookUrl?.trim() || '';
     if (url.length > 0) {
         if (url.endsWith('/')) {
-            url = url.slice(0, -1); // Remove trailing slash
-        }
-        if (!url.endsWith('/incoming')) {
-            url = `${url}/incoming`; // Auto-append
+            url = url.slice(0, -1); 
         }
     }
     const finalConfig = { ...newConfig, webhookUrl: url };
@@ -87,7 +96,6 @@ const App: React.FC = () => {
     localStorage.setItem('twilio_config', JSON.stringify(finalConfig));
   };
 
-  // Function to trigger n8n webhook
   const triggerAutomation = async (log: CallLogEntry) => {
     if (!appSettings.n8nWebhookUrl) return;
 
@@ -107,15 +115,11 @@ const App: React.FC = () => {
     const updatedLogs = [log, ...callLogs];
     setCallLogs(updatedLogs);
     localStorage.setItem('call_logs', JSON.stringify(updatedLogs));
-    
-    // Trigger automation for ALL calls (Web, Twilio, SpeedDial)
     triggerAutomation(log);
   };
 
   const handleWebCallEnd = (logs: LogEntry[]) => {
     setIsCallActive(false);
-    
-    // Don't save if empty or just system messages
     if (logs.length <= 1) return;
 
     const logEntry: CallLogEntry = {
@@ -131,10 +135,13 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="flex h-screen w-screen bg-slate-950 text-slate-200 overflow-hidden">
+    <div className="flex h-screen w-screen text-slate-200 overflow-hidden relative selection:bg-indigo-500/30">
+      
+      {/* Sidebar Navigation */}
       <Sidebar currentView={currentView} onViewChange={setCurrentView} />
       
-      <main className="flex-1 flex flex-col relative">
+      {/* Main Content Area */}
+      <main className="flex-1 flex flex-col relative z-10">
         
         {currentView === 'assistants' && (
           <AssistantConfigPanel 
@@ -158,6 +165,8 @@ const App: React.FC = () => {
             twilioConfig={twilioConfig}
             onCallLog={handleCallLog}
             n8nWebhookUrl={appSettings.n8nWebhookUrl}
+            savedState={speedDialState}
+            onStateChange={handleSpeedDialChange}
           />
         )}
 
@@ -181,10 +190,10 @@ const App: React.FC = () => {
             />
         )}
         
-        {/* Disclaimer Footer */}
+        {/* Footer Disclaimer */}
         {currentView !== 'settings' && (
-            <div className="absolute bottom-4 right-8 text-[10px] text-slate-600 max-w-md text-right pointer-events-none hidden md:block">
-                <p>Architecture Note: This demo uses <strong>Gemini Live API</strong> directly in the browser to simulate the Vapi.ai architecture (Telephony + STT + LLM + TTS) with ultra-low latency.</p>
+            <div className="absolute bottom-4 right-8 text-[10px] text-white/10 max-w-md text-right pointer-events-none hidden md:block mix-blend-overlay font-medium tracking-widest uppercase">
+                Bianca Voice OS • Gemini Live
             </div>
         )}
       </main>

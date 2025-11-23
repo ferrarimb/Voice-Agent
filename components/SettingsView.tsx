@@ -1,6 +1,5 @@
-
-import React, { useState } from 'react';
-import { Save, Workflow, BellRing, Zap, Phone, Globe, Server, Terminal, ShieldAlert, AlertTriangle, X, Cpu, Webhook, Copy, CheckCircle2 } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Save, Server, Phone, Globe, Workflow, Copy, CheckCircle2, Webhook, Eye, EyeOff, Terminal, Radio, AlertTriangle, Cpu, X } from 'lucide-react';
 import { AppSettings, TwilioConfig } from '../types';
 
 interface SettingsViewProps {
@@ -14,8 +13,18 @@ const SettingsView: React.FC<SettingsViewProps> = ({ settings, twilioConfig, onS
   const [localSettings, setLocalSettings] = useState<AppSettings>(settings);
   const [localTwilio, setLocalTwilio] = useState<TwilioConfig>(twilioConfig);
   const [showSuccess, setShowSuccess] = useState(false);
-  const [showServerGuide, setShowServerGuide] = useState(false);
   const [copyStatus, setCopyStatus] = useState<string | null>(null);
+  const [showServerGuide, setShowServerGuide] = useState(false);
+
+  // Visibility States
+  const [showAuthToken, setShowAuthToken] = useState(false);
+  const [showOpenAIKey, setShowOpenAIKey] = useState(false);
+
+  // Sync state if props change (e.g. initial load)
+  useEffect(() => {
+     setLocalSettings(settings);
+     setLocalTwilio(twilioConfig);
+  }, [settings, twilioConfig]);
 
   const handleSave = () => {
     onSave(localSettings);
@@ -24,28 +33,25 @@ const SettingsView: React.FC<SettingsViewProps> = ({ settings, twilioConfig, onS
     setTimeout(() => setShowSuccess(false), 3000);
   };
 
-  // Logic for Webhook Info (Moved from SpeedDialInterface)
-  let webhookBaseUrl = 'https://seu-ngrok.ngrok-free.app';
+  let webhookBaseUrl = 'http://localhost:5000';
   if (localTwilio.webhookUrl) {
       try {
-          webhookBaseUrl = new URL(localTwilio.webhookUrl).origin;
-      } catch (e) {
-          if(localTwilio.webhookUrl.startsWith('http')) {
-             webhookBaseUrl = localTwilio.webhookUrl;
-          }
-      }
+          // If it's ngrok, use it. If it doesn't have protocol, add it.
+          const urlStr = localTwilio.webhookUrl.startsWith('http') ? localTwilio.webhookUrl : `https://${localTwilio.webhookUrl}`;
+          const u = new URL(urlStr);
+          webhookBaseUrl = u.origin;
+      } catch (e) { webhookBaseUrl = localTwilio.webhookUrl; }
   }
-  
   const webhookEndpoint = `${webhookBaseUrl}/webhook/speed-dial`;
 
   const jsonExample = `{
   "nome_lead": "Maria Souza",
   "data_agendamento": "14:00",
   "telefone_lead": "+5511999998888",
-  "telefone_sdr": "${localTwilio.fromNumber || '+5511999997777'}",
+  "telefone_sdr": "${localTwilio.fromNumber || '+5511993137410'}",
   "TWILIO_ACCOUNT_SID": "${localTwilio.accountSid || 'AC...'}",
   "TWILIO_AUTH_TOKEN": "${localTwilio.authToken ? '*******' : '...'}",
-  "TWILIO_FROM_NUMBER": "${localTwilio.fromNumber || '+1...'}"
+  "TWILIO_FROM_NUMBER": "${localTwilio.fromNumber || '+5511993137410'}"
 }`;
 
   const copyToClipboard = (text: string, type: string) => {
@@ -55,347 +61,335 @@ const SettingsView: React.FC<SettingsViewProps> = ({ settings, twilioConfig, onS
   };
 
   return (
-    <div className="flex-1 bg-slate-950 h-screen overflow-y-auto">
-      <header className="h-16 border-b border-slate-800 bg-slate-900/50 flex items-center justify-between px-8 sticky top-0 backdrop-blur-sm z-10">
-        <h1 className="text-white font-semibold text-lg">Configurações</h1>
-        <div className="flex gap-3">
+    <div className="flex-1 h-screen overflow-y-auto custom-scrollbar">
+      <header className="h-24 flex items-center justify-between px-10 sticky top-0 z-20 backdrop-blur-xl bg-transparent border-b border-white/5">
+        <h1 className="text-white font-semibold text-2xl tracking-tight text-glow">System Settings</h1>
+        <div className="flex gap-4">
              <button 
                 onClick={() => setShowServerGuide(true)}
-                className="px-4 py-2 bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 text-sm font-medium rounded hover:bg-indigo-600/30 transition flex items-center gap-2"
+                className="glass-button px-6 py-3 rounded-2xl text-blue-200 text-sm font-medium hover:bg-blue-500/20 transition flex items-center gap-2 border-blue-500/20"
             >
-                <Server size={16} /> Guia do Servidor
+                <Server size={18} /> <span className="hidden sm:inline">Connection Guide</span>
             </button>
             <button 
-            onClick={handleSave}
-            className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-500 transition flex items-center gap-2"
+                onClick={handleSave}
+                className="glass-button px-8 py-3 rounded-2xl text-white text-sm font-bold hover:bg-white/10 transition flex items-center gap-2 shadow-[0_0_20px_rgba(255,255,255,0.1)]"
             >
-            <Save size={16} /> Salvar Alterações
+                <Save size={18} /> Save Config
             </button>
         </div>
       </header>
 
-      <div className="p-8 max-w-5xl mx-auto space-y-8">
-        
+      <div className="p-10 max-w-6xl mx-auto space-y-8 pb-40">
         {showSuccess && (
-            <div className="bg-green-500/10 border border-green-500/20 text-green-400 px-4 py-3 rounded-lg flex items-center gap-3 animate-in fade-in slide-in-from-top-2">
-                <BellRing size={18} />
-                <span>Configurações salvas com sucesso!</span>
+            <div className="glass-panel border-l-4 border-l-emerald-500 text-emerald-100 px-6 py-4 rounded-2xl flex items-center gap-4 animate-in slide-in-from-top-4 shadow-[0_0_30px_rgba(16,185,129,0.2)]">
+                <CheckCircle2 size={24} />
+                <span className="font-medium">Configuration saved successfully. System updated.</span>
             </div>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            
-            {/* Twilio Configuration */}
-            <section className="bg-slate-900 border border-slate-800 rounded-xl p-6 lg:col-span-1">
-                <div className="flex items-start gap-4 mb-6">
-                    <div className="w-10 h-10 rounded-lg bg-red-500/10 flex items-center justify-center text-red-500">
-                        <Phone size={24} />
-                    </div>
-                    <div>
-                        <h2 className="text-lg font-medium text-white">Twilio Telephony</h2>
-                        <p className="text-sm text-slate-400">
-                            Configure o acesso PSTN e números.
-                        </p>
-                    </div>
+        {/* Twilio Section */}
+        <section className="glass-panel rounded-[2.5rem] p-10">
+            <div className="flex items-center gap-4 mb-10 border-b border-white/5 pb-6">
+                <div className="w-12 h-12 rounded-2xl bg-red-500/10 flex items-center justify-center border border-red-500/20 shadow-[0_0_15px_rgba(239,68,68,0.2)]">
+                    <Phone size={24} className="text-red-400" />
                 </div>
-
-                <div className="space-y-4">
-                    <div>
-                        <label className="block text-xs font-medium text-slate-400 mb-1">Account SID</label>
-                        <input 
+                <div>
+                    <h2 className="text-xl font-semibold text-white">Telephony Provider</h2>
+                    <p className="text-sm text-white/40">Twilio API credentials for phone calls.</p>
+                </div>
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div className="space-y-3">
+                    <label className="text-xs uppercase font-bold tracking-widest text-white/30 ml-1">Account SID</label>
+                    <input 
                         type="text" 
                         value={localTwilio.accountSid}
                         onChange={(e) => setLocalTwilio({...localTwilio, accountSid: e.target.value})}
-                        className="w-full bg-slate-950 border border-slate-700 rounded-md px-3 py-2 text-slate-200 focus:ring-2 focus:ring-red-500 outline-none placeholder:text-slate-600"
+                        className="w-full glass-input rounded-2xl px-5 py-4 text-sm font-mono text-white/80"
                         placeholder="AC..."
-                        />
-                    </div>
-                    <div>
-                        <label className="block text-xs font-medium text-slate-400 mb-1">Auth Token</label>
+                    />
+                </div>
+                <div className="space-y-3">
+                    <label className="text-xs uppercase font-bold tracking-widest text-white/30 ml-1">Auth Token</label>
+                    <div className="relative">
                         <input 
-                        type="password" 
-                        value={localTwilio.authToken}
-                        onChange={(e) => setLocalTwilio({...localTwilio, authToken: e.target.value})}
-                        className="w-full bg-slate-950 border border-slate-700 rounded-md px-3 py-2 text-slate-200 focus:ring-2 focus:ring-red-500 outline-none placeholder:text-slate-600"
+                            type={showAuthToken ? "text" : "password"}
+                            value={localTwilio.authToken}
+                            onChange={(e) => setLocalTwilio({...localTwilio, authToken: e.target.value})}
+                            className="w-full glass-input rounded-2xl px-5 py-4 text-sm font-mono text-white/80 pr-12"
                         />
+                        <button 
+                            onClick={() => setShowAuthToken(!showAuthToken)}
+                            className="absolute right-4 top-1/2 -translate-y-1/2 text-white/30 hover:text-white transition"
+                        >
+                            {showAuthToken ? <EyeOff size={18} /> : <Eye size={18} />}
+                        </button>
                     </div>
-                    <div>
-                        <label className="block text-xs font-medium text-slate-400 mb-1">From Number</label>
-                        <input 
+                </div>
+                <div className="space-y-3">
+                    <label className="text-xs uppercase font-bold tracking-widest text-white/30 ml-1">Caller ID (From)</label>
+                    <input 
                         type="text" 
                         value={localTwilio.fromNumber}
                         onChange={(e) => setLocalTwilio({...localTwilio, fromNumber: e.target.value})}
-                        className="w-full bg-slate-950 border border-slate-700 rounded-md px-3 py-2 text-slate-200 focus:ring-2 focus:ring-red-500 outline-none placeholder:text-slate-600"
-                        placeholder="+1..."
-                        />
-                    </div>
-                    <div className="pt-4 border-t border-slate-800">
-                        <label className="block text-xs font-medium text-slate-400 mb-1 flex items-center gap-2">
-                        <Globe size={12} /> Webhook URL (Ngrok)
-                        </label>
-                        <input 
+                        className="w-full glass-input rounded-2xl px-5 py-4 text-sm font-mono text-white/80"
+                        placeholder="+55..."
+                    />
+                </div>
+                <div className="space-y-3">
+                    <label className="text-xs uppercase font-bold tracking-widest text-white/30 ml-1">Ngrok URL (HTTPS)</label>
+                    <input 
                         type="text" 
                         value={localTwilio.webhookUrl || ''}
                         onChange={(e) => setLocalTwilio({...localTwilio, webhookUrl: e.target.value})}
-                        className="w-full bg-slate-950 border border-slate-700 rounded-md px-3 py-2 text-slate-200 focus:ring-2 focus:ring-blue-500 outline-none placeholder:text-slate-600"
-                        placeholder="https://...ngrok.app"
-                        />
-                        <p className="text-[10px] text-slate-500 mt-2">
-                           URL necessária para streaming de áudio (WebSocket).
-                        </p>
+                        className="w-full glass-input rounded-2xl px-5 py-4 text-sm text-blue-300 font-mono border-blue-500/30 bg-blue-500/5 focus:bg-blue-500/10"
+                        placeholder="https://..."
+                    />
+                </div>
+            </div>
+        </section>
+
+        {/* Integrations Section */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <section className="glass-panel rounded-[2.5rem] p-10">
+                <div className="flex items-center gap-4 mb-8">
+                    <div className="w-10 h-10 rounded-2xl bg-green-500/10 flex items-center justify-center border border-green-500/20">
+                        <Globe size={20} className="text-green-400" />
                     </div>
+                    <h2 className="text-lg font-semibold text-white">OpenAI</h2>
+                </div>
+                <div className="space-y-3">
+                    <label className="text-xs uppercase font-bold tracking-widest text-white/30 ml-1">API Key</label>
+                    <div className="relative">
+                        <input 
+                            type={showOpenAIKey ? "text" : "password"}
+                            value={localSettings.openaiApiKey || ''}
+                            onChange={(e) => setLocalSettings({ ...localSettings, openaiApiKey: e.target.value })}
+                            className="w-full glass-input rounded-2xl px-5 py-4 text-sm font-mono text-white/80 pr-12"
+                            placeholder="sk-..."
+                        />
+                        <button 
+                            onClick={() => setShowOpenAIKey(!showOpenAIKey)}
+                            className="absolute right-4 top-1/2 -translate-y-1/2 text-white/30 hover:text-white transition"
+                        >
+                            {showOpenAIKey ? <EyeOff size={18} /> : <Eye size={18} />}
+                        </button>
+                    </div>
+                    <p className="text-[10px] text-white/30 ml-1">Used for server-side Whisper & Logic.</p>
                 </div>
             </section>
 
-             {/* API Keys Section */}
-             <div className="space-y-8 lg:col-span-1">
-                 
-                <section className="bg-slate-900 border border-slate-800 rounded-xl p-6">
-                    <div className="mb-4">
-                        <h2 className="text-lg font-medium text-white">AI Brain</h2>
-                        <p className="text-sm text-slate-400">Credenciais da API.</p>
+            <section className="glass-panel rounded-[2.5rem] p-10">
+                <div className="flex items-center gap-4 mb-8">
+                    <div className="w-10 h-10 rounded-2xl bg-orange-500/10 flex items-center justify-center border border-orange-500/20">
+                        <Workflow size={20} className="text-orange-400" />
                     </div>
-                    <div className="space-y-2">
-                        <label className="block text-xs font-medium text-slate-400">OpenAI API Key</label>
-                        <input 
-                            type="password" 
-                            value={localSettings.openaiApiKey || ''}
-                            onChange={(e) => setLocalSettings({ ...localSettings, openaiApiKey: e.target.value })}
-                            className="w-full bg-slate-950 border border-slate-700 rounded-md px-3 py-2 text-slate-200 focus:ring-2 focus:ring-green-500 outline-none placeholder:text-slate-600"
-                            placeholder="sk-..."
-                        />
-                        <p className="text-[10px] text-slate-500">
-                            Usado principalmente no lado do Servidor.
-                        </p>
-                    </div>
-                </section>
-
-                {/* n8n Integration */}
-                <section className="bg-slate-900 border border-slate-800 rounded-xl p-6">
-                    <div className="flex items-start gap-4 mb-6">
-                        <div className="w-10 h-10 rounded-lg bg-[#FF6D5A]/10 flex items-center justify-center text-[#FF6D5A]">
-                            <Workflow size={24} />
-                        </div>
-                        <div>
-                            <h2 className="text-lg font-medium text-white">Automação n8n</h2>
-                            <p className="text-sm text-slate-400">
-                                Webhook para processamento pós-chamada.
-                            </p>
-                        </div>
-                    </div>
-
-                    <div className="space-y-4">
-                        <div>
-                            <label className="block text-xs font-medium text-slate-400 mb-1">Webhook URL (POST)</label>
-                            <input 
-                                type="text" 
-                                value={localSettings.n8nWebhookUrl || ''}
-                                onChange={(e) => setLocalSettings({ ...localSettings, n8nWebhookUrl: e.target.value })}
-                                className="w-full bg-slate-950 border border-slate-700 rounded-md px-3 py-2 text-slate-200 focus:ring-2 focus:ring-[#FF6D5A] outline-none placeholder:text-slate-600"
-                                placeholder="https://your-n8n-instance.com/..."
-                            />
-                        </div>
-                    </div>
-                </section>
-
-             </div>
+                    <h2 className="text-lg font-semibold text-white">Automation (n8n)</h2>
+                </div>
+                <div className="space-y-3">
+                    <label className="text-xs uppercase font-bold tracking-widest text-white/30 ml-1">Webhook URL</label>
+                    <input 
+                        type="text" 
+                        value={localSettings.n8nWebhookUrl || ''}
+                        onChange={(e) => setLocalSettings({ ...localSettings, n8nWebhookUrl: e.target.value })}
+                        className="w-full glass-input rounded-2xl px-5 py-4 text-sm font-mono text-white/80"
+                        placeholder="https://..."
+                    />
+                </div>
+            </section>
         </div>
-
-        {/* Webhook Info Panel - REDESIGNED LAYOUT */}
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 border-l-4 border-l-blue-500">
-            <div className="flex items-center gap-2 mb-4 pb-4 border-b border-slate-800 text-blue-400">
-                <Webhook size={20} />
-                <h3 className="font-medium">Integração Externa (Ponte SDR)</h3>
+        
+         {/* Webhook Info Panel - Liquid Glass Style */}
+         <section className="glass-panel rounded-[2rem] p-10 border-l-4 border-l-blue-500/50">
+            <div className="flex items-center gap-3 mb-6 pb-6 border-b border-white/5 text-blue-300">
+                <Webhook size={24} />
+                <div>
+                     <h3 className="font-semibold text-lg text-white">Integração Externa (Ponte SDR)</h3>
+                     <p className="text-xs text-white/40 uppercase tracking-wider">Developer Endpoint</p>
+                </div>
             </div>
 
-            <p className="text-sm text-slate-400 mb-6">
+            <p className="text-sm text-white/60 mb-8 leading-relaxed">
                 Para automatizar o Speed-to-Lead (ex: n8n, Zapier), envie uma requisição POST com o JSON abaixo para o seu servidor.
             </p>
 
-            {/* Changed to flex-col to prevent overlapping/cramping of payload */}
-            <div className="flex flex-col gap-8">
-                <div className="space-y-4">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
+                <div className="space-y-6">
                     <div className="space-y-2">
-                        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">URL do Endpoint</label>
-                        <div className="flex gap-2 items-center">
-                            <span className="bg-green-500/20 text-green-400 px-3 py-2 rounded text-sm font-mono border border-green-500/30 font-bold h-full flex items-center">POST</span>
-                            <div className="flex-1 bg-black rounded border border-slate-700 flex items-center justify-between pl-3 pr-1 py-2">
-                                <code className="text-sm text-slate-300 truncate font-mono">{webhookEndpoint}</code>
-                                <button onClick={() => copyToClipboard(webhookEndpoint, 'url')} className="p-1.5 hover:bg-slate-800 rounded text-slate-500 hover:text-white transition">
-                                    {copyStatus === 'url' ? <CheckCircle2 size={16} className="text-green-500"/> : <Copy size={16} />}
+                        <label className="text-xs font-bold text-white/30 uppercase tracking-widest">URL do Endpoint</label>
+                        <div className="flex gap-3 h-12">
+                            <span className="glass-panel bg-emerald-500/10 text-emerald-300 px-4 rounded-xl text-xs font-mono font-bold flex items-center justify-center border border-emerald-500/20">POST</span>
+                            <div className="flex-1 glass-input rounded-xl flex items-center justify-between pl-4 pr-2">
+                                <code className="text-xs text-white/70 truncate font-mono">{webhookEndpoint}</code>
+                                <button onClick={() => copyToClipboard(webhookEndpoint, 'url')} className="p-2 hover:bg-white/10 rounded-lg text-white/40 hover:text-white transition">
+                                    {copyStatus === 'url' ? <CheckCircle2 size={16} className="text-emerald-500"/> : <Copy size={16} />}
                                 </button>
                             </div>
                         </div>
                     </div>
-                     <div className="text-xs text-slate-500 bg-slate-950/50 p-3 rounded border border-slate-800/50">
-                        <p><strong>Notas:</strong></p>
-                        <ul className="list-disc list-inside space-y-1 mt-1">
+                     <div className="glass-panel bg-white/[0.02] p-6 rounded-xl border border-white/5 text-xs text-white/50 leading-relaxed space-y-2">
+                        <p><strong className="text-white/80">Como funciona:</strong></p>
+                        <ul className="list-disc list-inside space-y-1 ml-1">
                             <li>O Endpoint requer que seu servidor local esteja rodando e o Ngrok conectado.</li>
-                            <li>O sistema primeiro liga para o <code>telefone_sdr</code> (Agente), sussurra os dados, e depois conecta ao <code>telefone_lead</code>.</li>
+                            <li>O sistema liga para o <code>telefone_sdr</code> (Agente), sussurra os dados, e conecta ao <code>telefone_lead</code>.</li>
                         </ul>
                     </div>
                 </div>
 
                 <div className="space-y-2">
-                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Payload Exemplo (JSON)</label>
-                    <div className="bg-black rounded border border-slate-700 p-4 relative group">
-                        <button onClick={() => copyToClipboard(jsonExample, 'json')} className="absolute top-2 right-2 p-1.5 bg-slate-800 rounded text-slate-400 opacity-0 group-hover:opacity-100 transition hover:text-white z-10">
-                            {copyStatus === 'json' ? <CheckCircle2 size={14} className="text-green-500"/> : <Copy size={14} />}
+                    <label className="text-xs font-bold text-white/30 uppercase tracking-widest">Payload Exemplo (JSON)</label>
+                    <div className="glass-input bg-black/40 rounded-xl p-5 relative group border border-white/10">
+                        <button onClick={() => copyToClipboard(jsonExample, 'json')} className="absolute top-4 right-4 p-2 bg-white/10 hover:bg-white/20 rounded-lg text-white/40 group-hover:opacity-100 opacity-0 transition hover:text-white">
+                            {copyStatus === 'json' ? <CheckCircle2 size={14} className="text-emerald-500"/> : <Copy size={14} />}
                         </button>
-                        <pre className="text-xs text-blue-300 font-mono leading-relaxed whitespace-pre-wrap overflow-x-auto">
+                        <pre className="text-[11px] text-blue-300 font-mono leading-relaxed whitespace-pre-wrap overflow-x-auto custom-scrollbar">
                             {jsonExample}
                         </pre>
                     </div>
                 </div>
             </div>
-        </div>
+        </section>
 
       </div>
 
-      {/* Server Guide Modal */}
-      {showServerGuide && (
-          <ServerGuideModal onClose={() => setShowServerGuide(false)} />
-      )}
+      {showServerGuide && <ServerGuideModal onClose={() => setShowServerGuide(false)} />}
     </div>
   );
 };
 
+// Adapted Server Guide with Liquid Glass Design
 const ServerGuideModal: React.FC<{onClose: () => void}> = ({ onClose }) => {
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4">
-            <div className="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-4xl h-[90vh] flex flex-col shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-                <div className="flex items-center justify-between p-6 border-b border-slate-800 bg-slate-950">
-                    <div className="flex items-center gap-3">
-                        <div className="p-2 bg-indigo-500/10 rounded-lg border border-indigo-500/20">
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+            <div className="absolute inset-0 bg-black/80 backdrop-blur-md animate-in fade-in duration-300" onClick={onClose}></div>
+            <div className="relative w-full max-w-4xl h-[85vh] glass-panel rounded-[2.5rem] flex flex-col shadow-2xl border border-white/10 bg-[#050505]/90 overflow-hidden animate-in zoom-in-95 duration-300">
+                
+                {/* Header */}
+                <div className="flex items-center justify-between p-8 border-b border-white/5 bg-white/[0.02]">
+                    <div className="flex items-center gap-4">
+                        <div className="p-3 bg-indigo-500/10 rounded-2xl border border-indigo-500/20 shadow-[0_0_15px_rgba(99,102,241,0.15)]">
                             <Server className="text-indigo-400" size={24} />
                         </div>
                         <div>
-                            <h3 className="text-xl font-bold text-white">Manual de Operações do Servidor</h3>
-                            <p className="text-sm text-slate-400">Guia definitivo para rodar a integração localmente.</p>
+                            <h3 className="text-xl font-semibold text-white">Manual de Operações do Servidor</h3>
+                            <p className="text-sm text-white/40">Guia definitivo para rodar a integração localmente.</p>
                         </div>
                     </div>
-                    <button onClick={onClose} className="text-slate-500 hover:text-white p-2 hover:bg-slate-800 rounded-full transition">
+                    <button onClick={onClose} className="w-10 h-10 rounded-full flex items-center justify-center hover:bg-white/10 text-white/40 hover:text-white transition">
                         <X size={24} />
                     </button>
                 </div>
                 
-                <div className="flex-1 overflow-y-auto p-0 bg-slate-950">
+                <div className="flex-1 overflow-y-auto p-0 custom-scrollbar">
                     
-                    {/* Diagrama Visual */}
-                    <div className="bg-slate-900 p-8 border-b border-slate-800 flex flex-col items-center justify-center">
-                        <h4 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-6">Arquitetura da Solução</h4>
-                        <div className="flex items-center gap-4 text-slate-400 text-sm flex-wrap justify-center">
-                             <div className="flex flex-col items-center gap-2">
-                                 <div className="w-12 h-12 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center">
+                    {/* Architecture Diagram */}
+                    <div className="bg-white/[0.01] p-10 border-b border-white/5 flex flex-col items-center justify-center relative overflow-hidden">
+                        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full h-20 bg-gradient-to-r from-transparent via-indigo-500/5 to-transparent blur-3xl pointer-events-none"></div>
+                        <h4 className="text-[10px] font-bold text-white/30 uppercase tracking-[0.2em] mb-8 relative z-10">Fluxo de Dados</h4>
+                        <div className="flex items-center gap-6 text-white/60 text-sm flex-wrap justify-center relative z-10">
+                             <div className="flex flex-col items-center gap-3 group">
+                                 <div className="w-14 h-14 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center group-hover:bg-white/10 transition shadow-lg">
                                      <Phone size={20} />
                                  </div>
-                                 <span>Celular</span>
+                                 <span className="text-xs font-medium">Celular</span>
                              </div>
-                             <div className="h-px w-8 bg-slate-700"></div>
-                             <div className="flex flex-col items-center gap-2">
-                                 <div className="w-12 h-12 rounded-full bg-red-900/20 border border-red-500/30 flex items-center justify-center text-red-400">
-                                     <span className="font-bold">Twilio</span>
+                             <div className="h-px w-10 bg-white/10"></div>
+                             <div className="flex flex-col items-center gap-3 group">
+                                 <div className="w-14 h-14 rounded-2xl bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-400 shadow-[0_0_15px_rgba(239,68,68,0.1)]">
+                                     <span className="font-bold text-[10px]">TWILIO</span>
                                  </div>
-                                 <span>Telefonia</span>
+                                 <span className="text-xs font-medium">Telefonia</span>
                              </div>
-                             <div className="h-px w-8 bg-slate-700"></div>
-                             <div className="flex flex-col items-center gap-2">
-                                 <div className="w-12 h-12 rounded-full bg-blue-900/20 border border-blue-500/30 flex items-center justify-center text-blue-400">
+                             <div className="h-px w-10 bg-white/10"></div>
+                             <div className="flex flex-col items-center gap-3 group">
+                                 <div className="w-14 h-14 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 shadow-[0_0_15px_rgba(59,130,246,0.1)]">
                                      <Globe size={20} />
                                  </div>
-                                 <span>Ngrok (Túnel)</span>
+                                 <span className="text-xs font-medium">Ngrok</span>
                              </div>
-                             <div className="h-px w-8 bg-slate-700"></div>
-                             <div className="flex flex-col items-center gap-2">
-                                 <div className="w-12 h-12 rounded-full bg-indigo-600 text-white flex items-center justify-center shadow-lg shadow-indigo-500/20">
+                             <div className="h-px w-10 bg-white/10"></div>
+                             <div className="flex flex-col items-center gap-3 group">
+                                 <div className="w-14 h-14 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 shadow-[0_0_15px_rgba(99,102,241,0.1)]">
                                      <Cpu size={20} />
                                  </div>
-                                 <span className="font-bold text-white">Seu PC</span>
-                             </div>
-                             <div className="h-px w-8 bg-slate-700"></div>
-                             <div className="flex flex-col items-center gap-2">
-                                 <div className="w-12 h-12 rounded-full bg-gradient-to-br from-green-400 to-emerald-500 text-white flex items-center justify-center">
-                                     <span className="font-bold text-xs">AI</span>
-                                 </div>
-                                 <span>OpenAI GPT-4o</span>
+                                 <span className="text-xs font-medium text-white">Seu PC</span>
                              </div>
                         </div>
                     </div>
 
-                    <div className="p-8 space-y-10">
+                    <div className="p-10 space-y-12">
 
                         {/* SECTION 1: SETUP */}
                         <section>
-                            <h4 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
-                                <span className="w-6 h-6 rounded-full bg-slate-800 text-slate-400 flex items-center justify-center text-xs border border-slate-700">1</span>
+                            <h4 className="text-lg font-semibold text-white mb-6 flex items-center gap-3">
+                                <span className="w-8 h-8 rounded-full bg-white/5 text-white/60 flex items-center justify-center text-xs font-bold border border-white/10">1</span>
                                 Preparação (Faça uma vez)
                             </h4>
                             
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                <div className="bg-slate-900 border border-slate-800 rounded-lg p-5">
-                                    <h5 className="font-medium text-indigo-400 mb-3 flex items-center gap-2">
+                                <div className="glass-panel bg-white/[0.02] border-white/5 rounded-2xl p-6 hover:bg-white/[0.04] transition">
+                                    <h5 className="font-bold text-indigo-300 text-sm mb-3 flex items-center gap-2">
                                         <Terminal size={16} /> O Truque do CMD
                                     </h5>
-                                    <p className="text-sm text-slate-400 mb-3">
+                                    <p className="text-xs text-white/50 mb-4 leading-relaxed">
                                         Para não se perder nas pastas:
                                     </p>
-                                    <ol className="list-decimal ml-4 space-y-2 text-sm text-slate-300">
+                                    <ol className="list-decimal ml-4 space-y-2 text-xs text-white/70">
                                         <li>Abra a pasta do projeto no Windows Explorer.</li>
                                         <li>Clique na barra de endereço lá no topo.</li>
-                                        <li>Apague tudo, digite <code className="bg-black px-1 rounded text-white">cmd</code> e dê Enter.</li>
+                                        <li>Apague tudo, digite <code className="bg-white/10 px-1.5 py-0.5 rounded text-white">cmd</code> e dê Enter.</li>
                                     </ol>
-                                    <div className="mt-3 text-xs bg-slate-950 p-2 rounded border border-slate-800 text-slate-500">
-                                        Isso abre o terminal preto já no lugar certo.
-                                    </div>
                                 </div>
 
-                                <div className="bg-slate-900 border border-slate-800 rounded-lg p-5">
-                                    <h5 className="font-medium text-green-400 mb-3 flex items-center gap-2">
-                                        <ShieldAlert size={16} /> O Arquivo .env
+                                <div className="glass-panel bg-white/[0.02] border-white/5 rounded-2xl p-6 hover:bg-white/[0.04] transition">
+                                    <h5 className="font-bold text-emerald-300 text-sm mb-3 flex items-center gap-2">
+                                        <AlertTriangle size={16} /> O Arquivo .env
                                     </h5>
-                                    <p className="text-sm text-slate-400 mb-3">
+                                    <p className="text-xs text-white/50 mb-4 leading-relaxed">
                                         O servidor precisa da sua chave OpenAI.
                                     </p>
-                                    <ul className="space-y-2 text-sm text-slate-300">
-                                        <li>1. Crie um arquivo chamado <code className="text-white">.env</code> na pasta.</li>
+                                    <ul className="space-y-2 text-xs text-white/70">
+                                        <li>1. Crie um arquivo chamado <code className="text-white bg-white/10 px-1 rounded">.env</code> na pasta.</li>
                                         <li>2. Abra no Bloco de Notas.</li>
                                         <li>3. Cole sua chave exatamente assim:</li>
                                     </ul>
-                                    <code className="block mt-2 bg-black p-2 rounded text-xs text-green-300 font-mono">
+                                    <code className="block mt-3 bg-black/40 p-3 rounded-lg text-[10px] text-emerald-400 font-mono border border-white/5">
                                         OPENAI_API_KEY=sk-proj-...
                                     </code>
                                 </div>
                             </div>
                         </section>
 
-                        {/* SECTION 2: EXECUÇÃO */}
+                        {/* SECTION 2: EXECUTION */}
                         <section>
-                            <h4 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
-                                <span className="w-6 h-6 rounded-full bg-slate-800 text-slate-400 flex items-center justify-center text-xs border border-slate-700">2</span>
+                            <h4 className="text-lg font-semibold text-white mb-6 flex items-center gap-3">
+                                <span className="w-8 h-8 rounded-full bg-white/5 text-white/60 flex items-center justify-center text-xs font-bold border border-white/10">2</span>
                                 Rodando o Sistema (Sempre que for usar)
                             </h4>
                             
                             <div className="space-y-4">
                                 {/* Terminal 1 */}
-                                <div className="flex gap-4">
+                                <div className="flex gap-6 group">
                                     <div className="w-8 flex flex-col items-center pt-2">
-                                        <div className="h-full w-px bg-slate-800"></div>
+                                        <div className="h-full w-px bg-gradient-to-b from-indigo-500/50 to-transparent"></div>
                                     </div>
-                                    <div className="flex-1 bg-slate-900 border border-slate-800 rounded-lg overflow-hidden">
-                                        <div className="bg-slate-800 px-4 py-2 text-xs font-bold text-slate-300 flex justify-between">
-                                            <span>TERMINAL 1: O SERVIDOR (Use o truque do cmd)</span>
+                                    <div className="flex-1 glass-panel bg-black/40 border-white/10 rounded-2xl overflow-hidden shadow-lg">
+                                        <div className="bg-white/5 px-5 py-3 text-[10px] font-bold text-white/40 flex justify-between uppercase tracking-wider border-b border-white/5">
+                                            <span>Terminal 1: O Servidor</span>
                                             <span className="text-indigo-400">Janela A</span>
                                         </div>
-                                        <div className="p-4 font-mono text-sm space-y-4">
+                                        <div className="p-5 font-mono text-sm space-y-5">
                                             <div>
-                                                <p className="text-slate-500 mb-1"># Passo 1: Instalar dependências (Só na primeira vez)</p>
-                                                <div className="bg-black p-3 rounded border border-slate-700 text-white">
+                                                <p className="text-white/30 text-xs mb-2"># Passo 1: Instalar dependências (Só na primeira vez)</p>
+                                                <div className="bg-black/50 p-3 rounded-xl border border-white/10 text-white/80 select-all">
                                                     npm install fastify @fastify/websocket @fastify/formbody ws dotenv
                                                 </div>
                                             </div>
                                             <div>
-                                                <p className="text-slate-500 mb-1"># Passo 2: Ligar o servidor</p>
-                                                <div className="bg-black p-3 rounded border border-slate-700 text-green-400">
+                                                <p className="text-white/30 text-xs mb-2"># Passo 2: Ligar o servidor</p>
+                                                <div className="bg-black/50 p-3 rounded-xl border border-white/10 text-emerald-400 font-bold select-all">
                                                     node server.js
                                                 </div>
                                             </div>
@@ -404,24 +398,25 @@ const ServerGuideModal: React.FC<{onClose: () => void}> = ({ onClose }) => {
                                 </div>
 
                                 {/* Terminal 2 */}
-                                <div className="flex gap-4">
+                                <div className="flex gap-6 group">
                                     <div className="w-8 flex flex-col items-center pt-2">
-                                        <div className="h-full w-px bg-slate-800"></div>
+                                        <div className="h-full w-px bg-gradient-to-b from-blue-500/50 to-transparent"></div>
                                     </div>
-                                    <div className="flex-1 bg-slate-900 border border-slate-800 rounded-lg overflow-hidden">
-                                        <div className="bg-slate-800 px-4 py-2 text-xs font-bold text-slate-300 flex justify-between">
-                                            <span>TERMINAL 2: O NGROK (Abra OUTRO cmd)</span>
+                                    <div className="flex-1 glass-panel bg-black/40 border-white/10 rounded-2xl overflow-hidden shadow-lg">
+                                        <div className="bg-white/5 px-5 py-3 text-[10px] font-bold text-white/40 flex justify-between uppercase tracking-wider border-b border-white/5">
+                                            <span>Terminal 2: O Ngrok</span>
                                             <span className="text-blue-400">Janela B</span>
                                         </div>
-                                        <div className="p-4 font-mono text-sm space-y-4">
+                                        <div className="p-5 font-mono text-sm space-y-5">
                                             <div>
-                                                <p className="text-slate-500 mb-1"># Comando Mágico (Se ngrok falhar, use npx ngrok)</p>
-                                                <div className="bg-black p-3 rounded border border-slate-700 text-blue-400">
+                                                <p className="text-white/30 text-xs mb-2"># Comando Mágico (Se ngrok falhar, use npx ngrok)</p>
+                                                <div className="bg-black/50 p-3 rounded-xl border border-white/10 text-blue-300 font-bold select-all">
                                                     npx ngrok http 5000
                                                 </div>
                                             </div>
-                                            <div className="bg-blue-900/20 p-3 rounded border border-blue-500/30 text-slate-300 text-xs">
-                                                Copie o link que aparece em <strong>Forwarding</strong> (ex: <code>https://xyz.ngrok-free.app</code>)
+                                            <div className="bg-blue-500/10 p-3 rounded-xl border border-blue-500/20 text-white/60 text-xs flex items-center gap-3">
+                                                <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse"></div>
+                                                <span>Copie o link em <strong>Forwarding</strong> (ex: https://xyz.ngrok-free.app)</span>
                                             </div>
                                         </div>
                                     </div>
@@ -431,31 +426,25 @@ const ServerGuideModal: React.FC<{onClose: () => void}> = ({ onClose }) => {
 
                         {/* SECTION 3: TROUBLESHOOTING */}
                         <section className="pb-8">
-                            <h4 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
-                                <AlertTriangle size={18} className="text-yellow-500" />
+                            <h4 className="text-lg font-semibold text-white mb-6 flex items-center gap-3">
+                                <AlertTriangle size={20} className="text-yellow-500" />
                                 Solução de Problemas
                             </h4>
                             
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div className="bg-red-950/20 border border-red-900/30 p-4 rounded-lg">
-                                    <h5 className="font-bold text-red-400 text-sm mb-2">Ngrok pede "Authtoken"</h5>
-                                    <p className="text-xs text-slate-400">
+                                <div className="glass-panel bg-red-500/5 border-red-500/10 p-5 rounded-2xl">
+                                    <h5 className="font-bold text-red-300 text-xs mb-2 uppercase tracking-wide">Ngrok pede "Authtoken"</h5>
+                                    <p className="text-[11px] text-white/50 leading-relaxed">
                                         O Ngrok agora exige login. 
-                                        1. Crie conta em <a href="https://dashboard.ngrok.com" target="_blank" className="underline text-white">dashboard.ngrok.com</a>.
-                                        2. Copie o comando <code>ngrok config add-authtoken...</code> do site deles.
-                                        3. Cole no terminal e dê Enter.
+                                        1. Crie conta em <a href="https://dashboard.ngrok.com" target="_blank" className="underline text-white hover:text-red-300">dashboard.ngrok.com</a>.
+                                        2. Copie o comando <code>ngrok config add-authtoken...</code>.
+                                        3. Cole no terminal.
                                     </p>
                                 </div>
-                                <div className="bg-yellow-950/20 border border-yellow-900/30 p-4 rounded-lg">
-                                    <h5 className="font-bold text-yellow-400 text-sm mb-2">Erro: Address in use (Porta ocupada)</h5>
-                                    <p className="text-xs text-slate-400">
-                                        Você já tem um servidor rodando. Feche a janela do terminal antigo ou aperte <code>Ctrl + C</code> nele para parar antes de rodar de novo.
-                                    </p>
-                                </div>
-                                <div className="bg-slate-800 p-4 rounded-lg">
-                                    <h5 className="font-bold text-white text-sm mb-2">Servidor fecha logo após abrir?</h5>
-                                    <p className="text-xs text-slate-400">
-                                        Verifique se você criou o arquivo <code>.env</code> corretamente com a chave <code>OPENAI_API_KEY</code>.
+                                <div className="glass-panel bg-yellow-500/5 border-yellow-500/10 p-5 rounded-2xl">
+                                    <h5 className="font-bold text-yellow-300 text-xs mb-2 uppercase tracking-wide">Erro: Address in use</h5>
+                                    <p className="text-[11px] text-white/50 leading-relaxed">
+                                        Porta ocupada. Feche a janela do terminal antigo ou aperte <code>Ctrl + C</code> nele antes de rodar de novo.
                                     </p>
                                 </div>
                             </div>

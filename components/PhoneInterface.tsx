@@ -1,5 +1,4 @@
-
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Phone, Delete, Loader2 } from 'lucide-react';
 import { TwilioConfig, AssistantConfig, CallLogEntry } from '../types';
 import { makeTwilioCall } from '../services/twilioService';
@@ -28,13 +27,9 @@ const PhoneInterface: React.FC<PhoneInterfaceProps> = ({ assistantConfig, twilio
 
   const handleCall = async () => {
     if (!phoneNumber) return;
-    
     setIsCalling(true);
     setStatusMsg(null);
-
     const result = await makeTwilioCall(twilioConfig, phoneNumber, assistantConfig.firstMessage, n8nWebhookUrl);
-    
-    // Create Log Entry
     const logEntry: CallLogEntry = {
         id: Date.now().toString(),
         timestamp: new Date().toISOString(),
@@ -46,81 +41,123 @@ const PhoneInterface: React.FC<PhoneInterfaceProps> = ({ assistantConfig, twilio
         errorMessage: result.error
     };
     onCallLog(logEntry);
-
     setIsCalling(false);
     if (result.success) {
-      setStatusMsg({ type: 'success', text: 'Call initiated successfully!' });
+      setStatusMsg({ type: 'success', text: 'Call initiated' });
     } else {
-      setStatusMsg({ type: 'error', text: `Call failed: ${result.error}` });
+      setStatusMsg({ type: 'error', text: 'Call failed' });
     }
   };
 
-  return (
-    <div className="flex-1 bg-slate-950 h-screen overflow-y-auto flex flex-col items-center justify-center p-4 relative">
+  // Enable Keyboard Support (Desktop)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // If the user is typing directly into the input (focused), let the browser/onChange handle it
+      // to avoid double entries. We only handle global keys if the input is NOT focused.
+      const isInputFocused = document.activeElement?.tagName === 'INPUT';
       
-      {/* Header */}
-      <div className="absolute top-0 left-0 w-full p-6 border-b border-slate-800 flex justify-between items-center bg-slate-900/50 backdrop-blur-sm z-10">
-        <h2 className="text-xl font-semibold text-white">Phone Interface</h2>
-        <div className="text-xs text-slate-500">
-             {twilioConfig.webhookUrl 
-                 ? "Backend Connected" 
-                 : "Demo Mode"}
-        </div>
-      </div>
+      if (isInputFocused) {
+          if (e.key === 'Enter') {
+              handleCall();
+              (document.activeElement as HTMLElement).blur(); // Close mobile keyboard on enter
+          }
+          return;
+      }
 
-      <div className="flex flex-col md:flex-row gap-8 w-full max-w-4xl items-start justify-center mt-16">
+      // Check for digits, star, hash
+      if (/^[0-9*#]$/.test(e.key)) {
+          if (phoneNumber.length < 15) {
+              setPhoneNumber(prev => prev + e.key);
+          }
+      } 
+      // Check for deletion
+      else if (e.key === 'Backspace' || e.key === 'Delete') {
+          setPhoneNumber(prev => prev.slice(0, -1));
+      } 
+      // Check for Enter to call
+      else if (e.key === 'Enter') {
+          handleCall();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [phoneNumber, isCalling]); // Dependencies needed to access latest state
+
+  // Handle direct typing (Mobile/Focused input)
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const val = e.target.value.replace(/[^0-9*#]/g, ''); // Allow only phone chars
+      if (val.length <= 15) {
+          setPhoneNumber(val);
+      }
+  };
+
+  return (
+    <div className="flex-1 h-screen overflow-y-auto flex flex-col items-center justify-center p-4 relative">
+      {/* Background radial glow for the phone */}
+      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-green-500/10 rounded-full blur-[100px] pointer-events-none"></div>
+
+      {/* Glass Dialer Container - iOS Style */}
+      <div className="glass-panel w-full max-w-[360px] rounded-[3rem] p-8 flex flex-col items-center relative shadow-2xl shadow-black/50 border border-white/10 bg-black/20 backdrop-blur-3xl">
         
-        {/* Dialer Section */}
-        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl w-full max-w-sm mx-auto">
-          <div className="mb-8">
-             <input 
-               type="text" 
-               value={phoneNumber}
-               onChange={(e) => setPhoneNumber(e.target.value)}
-               placeholder="+1..."
-               className="w-full bg-transparent text-center text-3xl font-mono text-white outline-none placeholder:text-slate-700"
-             />
-             <div className="h-6 text-center mt-2">
-               {statusMsg && (
-                 <span className={`text-xs ${statusMsg.type === 'success' ? 'text-green-400' : 'text-red-400'}`}>
-                   {statusMsg.text}
-                 </span>
-               )}
-             </div>
-          </div>
-
-          <div className="grid grid-cols-3 gap-4 mb-8">
-            {[1, 2, 3, 4, 5, 6, 7, 8, 9, '*', 0, '#'].map((key) => (
-              <button 
-                key={key}
-                onClick={() => handleNumberClick(key.toString())}
-                className="w-16 h-16 rounded-full bg-slate-800 hover:bg-slate-700 text-white text-xl font-semibold flex items-center justify-center mx-auto transition active:scale-95"
-              >
-                {key}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex justify-center gap-6 items-center">
-             <button onClick={handleDelete} className="p-4 text-slate-500 hover:text-white transition">
-               <Delete size={24} />
-             </button>
-             <button 
-               onClick={handleCall}
-               disabled={isCalling || !phoneNumber}
-               className="w-16 h-16 rounded-full bg-green-600 hover:bg-green-500 text-white flex items-center justify-center shadow-lg shadow-green-900/50 transition transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
-             >
-               {isCalling ? <Loader2 className="animate-spin" /> : <Phone size={28} fill="currentColor" />}
-             </button>
-          </div>
-          
-          <div className="mt-6 text-center px-4">
-             <p className="text-xs text-slate-500">
-               Calling as <span className="text-blue-400">{assistantConfig.name}</span>
-             </p>
-          </div>
+        {/* Top Notch/Status */}
+        <div className="w-16 h-1 bg-white/10 rounded-full mb-8"></div>
+        <div className="absolute top-6 right-8 text-[10px] font-bold tracking-widest text-white/20 uppercase">
+             {twilioConfig.webhookUrl ? "Connected" : "Demo"}
         </div>
 
+        {/* Number Display */}
+        <div className="mt-8 mb-10 w-full text-center h-24 flex flex-col justify-end">
+           <input 
+             type="tel" 
+             value={phoneNumber}
+             onChange={handleInputChange}
+             placeholder=""
+             className="w-full bg-transparent text-center text-4xl font-light text-white outline-none placeholder:text-white/10 tracking-widest"
+           />
+           <div className="h-6 mt-2 flex items-center justify-center">
+             {statusMsg && (
+               <span className={`text-xs font-semibold px-3 py-1 rounded-full ${statusMsg.type === 'success' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-red-500/20 text-red-300'}`}>
+                 {statusMsg.text}
+               </span>
+             )}
+           </div>
+        </div>
+
+        {/* Keypad */}
+        <div className="grid grid-cols-3 gap-x-6 gap-y-6 mb-12">
+          {[1, 2, 3, 4, 5, 6, 7, 8, 9, '*', 0, '#'].map((key) => (
+            <button 
+              key={key}
+              onClick={() => handleNumberClick(key.toString())}
+              className="w-20 h-20 rounded-full bg-white/5 hover:bg-white/15 backdrop-blur-md text-white text-3xl font-light flex items-center justify-center transition-all duration-200 active:scale-90 active:bg-white/20 border border-white/5 shadow-lg"
+            >
+              {key}
+            </button>
+          ))}
+        </div>
+
+        {/* Actions */}
+        <div className="flex justify-center gap-8 items-center w-full px-4 mb-4">
+           {/* Spacer or Back button if needed later */}
+           <div className="w-16 flex justify-center"></div>
+
+           <button 
+             onClick={handleCall}
+             disabled={isCalling || !phoneNumber}
+             className="w-20 h-20 rounded-full bg-green-500 hover:bg-green-400 text-white flex items-center justify-center shadow-[0_0_30px_rgba(34,197,94,0.4)] transition-all transform hover:scale-110 active:scale-95 disabled:opacity-50 disabled:shadow-none disabled:transform-none"
+           >
+             {isCalling ? <Loader2 className="animate-spin" size={32} /> : <Phone size={36} fill="currentColor" />}
+           </button>
+           
+           <div className="w-16 flex justify-center">
+             {phoneNumber && (
+                <button onClick={handleDelete} className="text-white/40 hover:text-white transition p-4">
+                    <Delete size={24} />
+                </button>
+             )}
+           </div>
+        </div>
       </div>
     </div>
   );
