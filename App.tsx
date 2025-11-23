@@ -110,6 +110,7 @@ const App: React.FC = () => {
           <PhoneInterface 
             assistantConfig={config} 
             onCallLog={handleCallLog}
+            n8nWebhookUrl={appSettings.n8nWebhookUrl}
           />
         )}
         

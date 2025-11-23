@@ -2,8 +2,8 @@
 /**
  * Vapi Clone Backend - Twilio <-> OpenAI Realtime API (GPT-4o Audio)
  * 
- * DEBUG MODE: STABLE v5
- * Fixes: CORS Preflight 404, URL Parsing
+ * DEBUG MODE: STABLE v6
+ * Fixes: n8n Webhook Propagation (Transcripts)
  */
 
 require('dotenv').config();
@@ -171,14 +171,21 @@ fastify.all('/connect-lead', async (request, reply) => {
 // 3. Incoming Call (Standard AI Agent)
 fastify.post('/incoming', async (request, reply) => {
     const host = request.headers.host;
-    log(`📞 Incoming AI Call! Host: ${host}`, "TWILIO");
+    // Extract n8n_url from query (populated by twilioService.ts)
+    const n8nUrl = request.query.n8n_url || '';
     
+    log(`📞 Incoming AI Call! Host: ${host} | Webhook: ${n8nUrl ? 'YES' : 'NO'}`, "TWILIO");
+    
+    // Pass n8n_url as a Stream Parameter to ensure it persists in the WebSocket session
+    // Note: We don't append it to the WSS URL anymore to avoid parsing issues
     const wssUrl = `wss://${host}/media-stream`;
     
     const twiml = `
     <Response>
         <Connect>
-            <Stream url="${wssUrl}" />
+            <Stream url="${wssUrl}">
+                <Parameter name="n8n_url" value="${n8nUrl}" />
+            </Stream>
         </Connect>
         <Pause length="40" /> 
     </Response>
@@ -192,20 +199,21 @@ fastify.register(async (fastifyInstance) => {
         
         const twilioWs = connection.socket || connection;
         
+        // Scope variables for this specific call session
+        let n8nUrl = null;
+        let streamSid = null;
+        let openAiWs = null;
+        let isOpenAiConnected = false;
+        let isSessionUpdated = false;
+        let hasSentGreeting = false;
+        const transcripts = [];
+
+        log(`🔌 Socket Connection Initiated`, "TWILIO");
+
         if (!twilioWs) {
             log("❌ FATAL: Could not retrieve WebSocket object from connection", "ERROR");
             return;
         }
-
-        log('🔌 Twilio Socket Connected', "TWILIO");
-
-        let streamSid = null;
-        let openAiWs = null;
-        
-        // State Flags
-        let isOpenAiConnected = false;
-        let isSessionUpdated = false;
-        let hasSentGreeting = false;
 
         // --- OpenAI Logic ---
         const connectToOpenAI = () => {
@@ -229,6 +237,10 @@ fastify.register(async (fastifyInstance) => {
                             voice: VOICE,
                             input_audio_format: 'g711_ulaw',
                             output_audio_format: 'g711_ulaw',
+                            // Enable input transcription for logging
+                            input_audio_transcription: {
+                                model: 'whisper-1'
+                            },
                             turn_detection: {
                                 type: 'server_vad',
                                 threshold: 0.5,
@@ -260,7 +272,28 @@ fastify.register(async (fastifyInstance) => {
                                 twilioWs.send(JSON.stringify({ event: 'clear', streamSid: streamSid }));
                                 openAiWs.send(JSON.stringify({ type: 'response.cancel' }));
                             }
+                        } else if (event.type === 'conversation.item.input_audio_transcription.completed') {
+                            // User spoke
+                            const text = event.transcript;
+                            if (text) {
+                                log(`User: ${text}`, "TRANSCRIPT");
+                                transcripts.push({ role: 'user', message: text, timestamp: new Date() });
+                            }
+                        } else if (event.type === 'response.done') {
+                            // Assistant spoke (get final text content if available)
+                            const outputItems = event.response?.output || [];
+                            for (const item of outputItems) {
+                                if (item.content) {
+                                    for (const content of item.content) {
+                                        if (content.type === 'audio' && content.transcript) {
+                                             log(`AI: ${content.transcript}`, "TRANSCRIPT");
+                                             transcripts.push({ role: 'assistant', message: content.transcript, timestamp: new Date() });
+                                        }
+                                    }
+                                }
+                            }
                         }
+
                     } catch (e) {
                         log(`Error processing OpenAI message: ${e.message}`, "ERROR");
                     }
@@ -287,7 +320,13 @@ fastify.register(async (fastifyInstance) => {
 
                 if (data.event === 'start') {
                     streamSid = data.start.streamSid;
-                    log(`▶️ Stream Started: ${streamSid}`, "TWILIO");
+                    
+                    // EXTRACT CUSTOM PARAMS (Robust way)
+                    if (data.start.customParameters && data.start.customParameters.n8n_url) {
+                        n8nUrl = data.start.customParameters.n8n_url;
+                    }
+
+                    log(`▶️ Stream Started: ${streamSid} | n8n Webhook: ${n8nUrl || 'None'}`, "TWILIO");
                     checkAndSendGreeting();
                 } else if (data.event === 'media' && isOpenAiConnected && openAiWs.readyState === WebSocket.OPEN) {
                     openAiWs.send(JSON.stringify({
@@ -295,8 +334,43 @@ fastify.register(async (fastifyInstance) => {
                         audio: data.media.payload
                     }));
                 } else if (data.event === 'stop') {
-                    log('⏹️ Call Ended', "TWILIO");
+                    log(`⏹️ Call Ended. Logs captured: ${transcripts.length}`, "TWILIO");
                     if (openAiWs) openAiWs.close();
+                    
+                    // Trigger Webhook if present
+                    if (n8nUrl) {
+                        if (transcripts.length > 0) {
+                            
+                            // FORMAT TRANSCRIPT FOR N8N
+                            // Creates a single, readable string from the conversation history
+                            const formattedTranscript = transcripts
+                                .map(t => `${t.role === 'user' ? 'User' : 'AI'}: ${t.message}`)
+                                .join('\n');
+
+                            log(`🚀 Triggering n8n Webhook: ${n8nUrl}`, "WEBHOOK");
+                            fetch(n8nUrl, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    assistantName: "Twilio AI Agent",
+                                    transcript: formattedTranscript, // Organized readable string
+                                    messages: transcripts, // Raw array data
+                                    timestamp: new Date().toISOString(),
+                                    type: 'pstn',
+                                    status: 'success'
+                                })
+                            }).then(async res => {
+                                const txt = await res.text();
+                                log(`Webhook Response: ${res.status} ${txt}`, "WEBHOOK");
+                            }).catch(err => {
+                                log(`Webhook Failed: ${err.message}`, "WEBHOOK");
+                            });
+                        } else {
+                            log(`⚠️ Skipping Webhook: No transcripts captured.`, "WEBHOOK");
+                        }
+                    } else {
+                        log(`ℹ️ No n8n URL configured for this call.`, "WEBHOOK");
+                    }
                 }
             } catch (e) {
                 log(`Error parsing Twilio message: ${e.message}`, "ERROR");

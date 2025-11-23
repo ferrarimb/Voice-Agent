@@ -1,9 +1,11 @@
+
 import { TwilioConfig } from '../types';
 
 export const makeTwilioCall = async (
   config: TwilioConfig, 
   to: string, 
-  message: string
+  message: string,
+  n8nWebhookUrl?: string
 ): Promise<{ success: boolean; error?: string }> => {
   if (!config.accountSid || !config.authToken || !config.fromNumber) {
     return { success: false, error: 'Missing Twilio credentials' };
@@ -18,7 +20,13 @@ export const makeTwilioCall = async (
 
   // If a Webhook URL is provided, use it to hand off control to a real backend server (e.g., Vapi, Custom Node.js)
   if (config.webhookUrl && config.webhookUrl.trim() !== '') {
-    formData.append('Url', config.webhookUrl);
+    let hookUrl = config.webhookUrl;
+    // Append the n8n webhook url to the stream server url so it knows where to send logs
+    if (n8nWebhookUrl) {
+       const separator = hookUrl.includes('?') ? '&' : '?';
+       hookUrl = `${hookUrl}${separator}n8n_url=${encodeURIComponent(n8nWebhookUrl)}`;
+    }
+    formData.append('Url', hookUrl);
   } else {
     // Improved Demo TwiML:
     // 1. Says the message

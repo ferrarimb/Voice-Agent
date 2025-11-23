@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { Phone, Settings, Delete, Loader2, Server, X, Terminal, CheckCircle2, AlertTriangle, Globe, Cpu, ShieldAlert } from 'lucide-react';
 import { TwilioConfig, AssistantConfig, CallLogEntry } from '../types';
@@ -6,9 +7,10 @@ import { makeTwilioCall } from '../services/twilioService';
 interface PhoneInterfaceProps {
   assistantConfig: AssistantConfig;
   onCallLog: (log: CallLogEntry) => void;
+  n8nWebhookUrl?: string;
 }
 
-const PhoneInterface: React.FC<PhoneInterfaceProps> = ({ assistantConfig, onCallLog }) => {
+const PhoneInterface: React.FC<PhoneInterfaceProps> = ({ assistantConfig, onCallLog, n8nWebhookUrl }) => {
   const [phoneNumber, setPhoneNumber] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [showServerGuide, setShowServerGuide] = useState(false);
@@ -66,7 +68,7 @@ const PhoneInterface: React.FC<PhoneInterfaceProps> = ({ assistantConfig, onCall
     setIsCalling(true);
     setStatusMsg(null);
 
-    const result = await makeTwilioCall(twilioConfig, phoneNumber, assistantConfig.firstMessage);
+    const result = await makeTwilioCall(twilioConfig, phoneNumber, assistantConfig.firstMessage, n8nWebhookUrl);
     
     // Create Log Entry
     const logEntry: CallLogEntry = {
