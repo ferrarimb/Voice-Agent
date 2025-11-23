@@ -1,39 +1,29 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Zap, User, Phone, Clock, AlertTriangle, Play, CheckCircle2 } from 'lucide-react';
 import { TwilioConfig, CallLogEntry } from '../types';
 
 interface SpeedDialInterfaceProps {
   onCallLog: (log: CallLogEntry) => void;
   n8nWebhookUrl?: string;
+  twilioConfig: TwilioConfig;
 }
 
-const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({ onCallLog, n8nWebhookUrl }) => {
+const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({ onCallLog, n8nWebhookUrl, twilioConfig }) => {
   const [lead, setLead] = useState({ name: '', phone: '', context: 'Imóvel Centro' });
-  const [sdrPhone, setSdrPhone] = useState('');
+  const [sdrPhone, setSdrPhone] = useState(twilioConfig.fromNumber || '');
   const [isLoading, setIsLoading] = useState(false);
   const [status, setStatus] = useState<{ type: 'success' | 'error', msg: string } | null>(null);
-
-  const [twilioConfig, setTwilioConfig] = useState<TwilioConfig | null>(null);
-
-  useEffect(() => {
-    const savedConfig = localStorage.getItem('twilio_config');
-    if (savedConfig) {
-      const parsed = JSON.parse(savedConfig);
-      setTwilioConfig(parsed);
-      setSdrPhone(parsed.fromNumber || ''); // Default SDR to the from number or let user edit
-    }
-  }, []);
 
   const handleTrigger = async () => {
     console.log("[Client DEBUG] Botão Disparar Pressionado");
     
-    if (!twilioConfig) {
-      setStatus({ type: 'error', msg: 'Please configure Twilio credentials in the Phone tab first.' });
+    if (!twilioConfig || !twilioConfig.accountSid) {
+      setStatus({ type: 'error', msg: 'Please configure Twilio credentials in Settings first.' });
       return;
     }
     if (!twilioConfig.webhookUrl) {
-      setStatus({ type: 'error', msg: 'Webhook URL (Ngrok) is required for the Bridge flow.' });
+      setStatus({ type: 'error', msg: 'Webhook URL (Ngrok) is required in Settings.' });
       return;
     }
 
@@ -62,18 +52,16 @@ const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({ onCallLog, n8nW
       lead_phone: lead.phone,
       sdr_phone: sdrPhone,
       horario: lead.context,
-      n8n_url: n8nWebhookUrl, // Pass the webhook URL to the backend
-      // Pass config to backend since it's a stateless demo server
+      n8n_url: n8nWebhookUrl, 
       twilio_config: {
         accountSid: twilioConfig.accountSid,
         authToken: twilioConfig.authToken,
         fromNumber: twilioConfig.fromNumber,
-        baseUrl: originUrl // Passa a origem limpa para o backend montar a callback
+        baseUrl: originUrl 
       }
     };
 
     console.log(`[Client DEBUG] Fetching: ${backendUrl}`);
-    console.log("[Client DEBUG] Payload:", payload);
 
     try {
       const response = await fetch(backendUrl, {
@@ -82,10 +70,7 @@ const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({ onCallLog, n8nW
         body: JSON.stringify(payload)
       });
       
-      console.log("[Client DEBUG] Response Status:", response.status);
-
       const data = await response.json();
-      console.log("[Client DEBUG] Response Body:", data);
 
       if (data.success) {
         setStatus({ type: 'success', msg: `Chamada Iniciada! SID: ${data.sid}` });
@@ -137,7 +122,6 @@ const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({ onCallLog, n8nW
                 2. Verifica se é humano (ignora Caixa Postal).
                 3. "Sussurra" os dados do Lead no ouvido do SDR.
                 4. Conecta a chamada ao <strong>Lead</strong>.
-                5. <strong className="text-orange-400">Novidade:</strong> Grava e transcreve a conversa.
             </p>
         </div>
 
@@ -201,6 +185,7 @@ const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({ onCallLog, n8nW
                             onChange={(e) => setSdrPhone(e.target.value)}
                         />
                     </div>
+                    <p className="text-[10px] text-slate-500">Puxado das configurações da Twilio.</p>
                 </div>
             </div>
 
@@ -228,11 +213,6 @@ const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({ onCallLog, n8nW
                              <div className="w-8 h-8 rounded-full bg-green-500/20 text-green-400 flex items-center justify-center font-bold">4</div>
                              <span>Conecta com <strong>{lead.phone || '...'}</strong></span>
                         </div>
-                        <div className="h-4 border-l border-dashed border-slate-700 ml-4"></div>
-                        <div className="flex items-center gap-3 text-sm text-slate-400">
-                             <div className="w-8 h-8 rounded-full bg-slate-700 text-white flex items-center justify-center font-bold text-[10px]">REC</div>
-                             <span>Gravação e Transcrição (Server)</span>
-                        </div>
                     </div>
                 </div>
 
@@ -258,9 +238,9 @@ const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({ onCallLog, n8nW
                         )}
                     </button>
                     {!twilioConfig?.webhookUrl && (
-                        <p className="text-center text-xs text-red-400">
-                            Configure a URL do Ngrok na aba Phone primeiro.
-                        </p>
+                         <div className="p-3 bg-red-500/10 border border-red-500/20 rounded text-center text-xs text-red-400 mt-2">
+                            ⚠️ Configure a URL do Ngrok em <strong>Configurações</strong>
+                        </div>
                     )}
                 </div>
             </div>

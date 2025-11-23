@@ -7,7 +7,7 @@ import PhoneInterface from './components/PhoneInterface';
 import SpeedDialInterface from './components/SpeedDialInterface';
 import LogsView from './components/LogsView';
 import SettingsView from './components/SettingsView';
-import { AssistantConfig, VoiceName, View, CallLogEntry, LogEntry, AppSettings } from './types';
+import { AssistantConfig, VoiceName, View, CallLogEntry, LogEntry, AppSettings, TwilioConfig } from './types';
 
 const DEFAULT_SYSTEM_INSTRUCTION = `You are a helpful, witty, and concise AI voice assistant. 
 Your task is to help the user with quick queries, simulate a phone support agent, or just chat.
@@ -35,6 +35,21 @@ const App: React.FC = () => {
     };
   });
 
+  // Twilio Settings
+  const [twilioConfig, setTwilioConfig] = useState<TwilioConfig>(() => {
+    const savedConfig = localStorage.getItem('twilio_config');
+    if (savedConfig) {
+      return JSON.parse(savedConfig);
+    }
+    // Default credentials for testing
+    return {
+      accountSid: 'AC3883d04e400fe1328cf490a389fa910a',
+      authToken: '37bc166feaaa030b1fddfae5fbf188b8',
+      fromNumber: '+5511993137410',
+      webhookUrl: 'https://uncandied-jeanene-pyruvic.ngrok-free.dev/incoming'
+    };
+  });
+
   const [config, setConfig] = useState<AssistantConfig>({
     name: 'Customer Support Bot v1',
     systemInstruction: DEFAULT_SYSTEM_INSTRUCTION,
@@ -47,6 +62,22 @@ const App: React.FC = () => {
   const handleSaveSettings = (newSettings: AppSettings) => {
       setAppSettings(newSettings);
       localStorage.setItem('app_settings', JSON.stringify(newSettings));
+  };
+
+  const handleSaveTwilioConfig = (newConfig: TwilioConfig) => {
+    // Smart Fix: Automatically append /incoming if missing
+    let url = newConfig.webhookUrl?.trim() || '';
+    if (url.length > 0) {
+        if (url.endsWith('/')) {
+            url = url.slice(0, -1); // Remove trailing slash
+        }
+        if (!url.endsWith('/incoming')) {
+            url = `${url}/incoming`; // Auto-append
+        }
+    }
+    const finalConfig = { ...newConfig, webhookUrl: url };
+    setTwilioConfig(finalConfig);
+    localStorage.setItem('twilio_config', JSON.stringify(finalConfig));
   };
 
   // Function to trigger n8n webhook
@@ -109,6 +140,7 @@ const App: React.FC = () => {
         {currentView === 'phone' && (
           <PhoneInterface 
             assistantConfig={config} 
+            twilioConfig={twilioConfig}
             onCallLog={handleCallLog}
             n8nWebhookUrl={appSettings.n8nWebhookUrl}
           />
@@ -116,6 +148,7 @@ const App: React.FC = () => {
         
         {currentView === 'speed-dial' && (
           <SpeedDialInterface 
+            twilioConfig={twilioConfig}
             onCallLog={handleCallLog}
             n8nWebhookUrl={appSettings.n8nWebhookUrl}
           />
@@ -128,7 +161,9 @@ const App: React.FC = () => {
         {currentView === 'settings' && (
           <SettingsView 
              settings={appSettings}
+             twilioConfig={twilioConfig}
              onSave={handleSaveSettings}
+             onSaveTwilioConfig={handleSaveTwilioConfig}
           />
         )}
         
