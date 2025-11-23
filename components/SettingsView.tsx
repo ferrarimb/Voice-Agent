@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { Save, Workflow, BellRing, Zap, Phone, Globe, Server, Terminal, ShieldAlert, AlertTriangle, X, Cpu } from 'lucide-react';
+import { Save, Workflow, BellRing, Zap, Phone, Globe, Server, Terminal, ShieldAlert, AlertTriangle, X, Cpu, Webhook, Copy, CheckCircle2 } from 'lucide-react';
 import { AppSettings, TwilioConfig } from '../types';
 
 interface SettingsViewProps {
@@ -15,6 +15,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({ settings, twilioConfig, onS
   const [localTwilio, setLocalTwilio] = useState<TwilioConfig>(twilioConfig);
   const [showSuccess, setShowSuccess] = useState(false);
   const [showServerGuide, setShowServerGuide] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<string | null>(null);
 
   const handleSave = () => {
     onSave(localSettings);
@@ -23,22 +24,52 @@ const SettingsView: React.FC<SettingsViewProps> = ({ settings, twilioConfig, onS
     setTimeout(() => setShowSuccess(false), 3000);
   };
 
+  // Logic for Webhook Info (Moved from SpeedDialInterface)
+  let webhookBaseUrl = 'https://seu-ngrok.ngrok-free.app';
+  if (localTwilio.webhookUrl) {
+      try {
+          webhookBaseUrl = new URL(localTwilio.webhookUrl).origin;
+      } catch (e) {
+          if(localTwilio.webhookUrl.startsWith('http')) {
+             webhookBaseUrl = localTwilio.webhookUrl;
+          }
+      }
+  }
+  
+  const webhookEndpoint = `${webhookBaseUrl}/webhook/speed-dial`;
+
+  const jsonExample = `{
+  "nome_lead": "Maria Souza",
+  "data_agendamento": "14:00",
+  "telefone_lead": "+5511999998888",
+  "telefone_sdr": "${localTwilio.fromNumber || '+5511999997777'}",
+  "TWILIO_ACCOUNT_SID": "${localTwilio.accountSid || 'AC...'}",
+  "TWILIO_AUTH_TOKEN": "${localTwilio.authToken ? '*******' : '...'}",
+  "TWILIO_FROM_NUMBER": "${localTwilio.fromNumber || '+1...'}"
+}`;
+
+  const copyToClipboard = (text: string, type: string) => {
+      navigator.clipboard.writeText(text);
+      setCopyStatus(type);
+      setTimeout(() => setCopyStatus(null), 2000);
+  };
+
   return (
     <div className="flex-1 bg-slate-950 h-screen overflow-y-auto">
       <header className="h-16 border-b border-slate-800 bg-slate-900/50 flex items-center justify-between px-8 sticky top-0 backdrop-blur-sm z-10">
-        <h1 className="text-white font-semibold text-lg">Global Settings</h1>
+        <h1 className="text-white font-semibold text-lg">Configurações</h1>
         <div className="flex gap-3">
              <button 
                 onClick={() => setShowServerGuide(true)}
                 className="px-4 py-2 bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 text-sm font-medium rounded hover:bg-indigo-600/30 transition flex items-center gap-2"
             >
-                <Server size={16} /> Server Guide
+                <Server size={16} /> Guia do Servidor
             </button>
             <button 
             onClick={handleSave}
             className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-500 transition flex items-center gap-2"
             >
-            <Save size={16} /> Save Changes
+            <Save size={16} /> Salvar Alterações
             </button>
         </div>
       </header>
@@ -48,7 +79,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({ settings, twilioConfig, onS
         {showSuccess && (
             <div className="bg-green-500/10 border border-green-500/20 text-green-400 px-4 py-3 rounded-lg flex items-center gap-3 animate-in fade-in slide-in-from-top-2">
                 <BellRing size={18} />
-                <span>All settings saved successfully!</span>
+                <span>Configurações salvas com sucesso!</span>
             </div>
         )}
 
@@ -63,7 +94,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({ settings, twilioConfig, onS
                     <div>
                         <h2 className="text-lg font-medium text-white">Twilio Telephony</h2>
                         <p className="text-sm text-slate-400">
-                            Configure PSTN access for calls and speed dial.
+                            Configure o acesso PSTN e números.
                         </p>
                     </div>
                 </div>
@@ -110,7 +141,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({ settings, twilioConfig, onS
                         placeholder="https://...ngrok.app"
                         />
                         <p className="text-[10px] text-slate-500 mt-2">
-                           Required for live audio streaming. Paste your Ngrok HTTPS URL here.
+                           URL necessária para streaming de áudio (WebSocket).
                         </p>
                     </div>
                 </div>
@@ -122,7 +153,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({ settings, twilioConfig, onS
                 <section className="bg-slate-900 border border-slate-800 rounded-xl p-6">
                     <div className="mb-4">
                         <h2 className="text-lg font-medium text-white">AI Brain</h2>
-                        <p className="text-sm text-slate-400">Provider API Credentials</p>
+                        <p className="text-sm text-slate-400">Credenciais da API.</p>
                     </div>
                     <div className="space-y-2">
                         <label className="block text-xs font-medium text-slate-400">OpenAI API Key</label>
@@ -134,7 +165,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({ settings, twilioConfig, onS
                             placeholder="sk-..."
                         />
                         <p className="text-[10px] text-slate-500">
-                            Used mainly for the Server-side (Realtime API). Ensure your <code>.env</code> file is also set.
+                            Usado principalmente no lado do Servidor.
                         </p>
                     </div>
                 </section>
@@ -146,9 +177,9 @@ const SettingsView: React.FC<SettingsViewProps> = ({ settings, twilioConfig, onS
                             <Workflow size={24} />
                         </div>
                         <div>
-                            <h2 className="text-lg font-medium text-white">n8n Automation</h2>
+                            <h2 className="text-lg font-medium text-white">Automação n8n</h2>
                             <p className="text-sm text-slate-400">
-                                Webhook trigger for post-call logic.
+                                Webhook para processamento pós-chamada.
                             </p>
                         </div>
                     </div>
@@ -168,7 +199,55 @@ const SettingsView: React.FC<SettingsViewProps> = ({ settings, twilioConfig, onS
                 </section>
 
              </div>
+        </div>
 
+        {/* Webhook Info Panel - REDESIGNED LAYOUT */}
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 border-l-4 border-l-blue-500">
+            <div className="flex items-center gap-2 mb-4 pb-4 border-b border-slate-800 text-blue-400">
+                <Webhook size={20} />
+                <h3 className="font-medium">Integração Externa (Ponte SDR)</h3>
+            </div>
+
+            <p className="text-sm text-slate-400 mb-6">
+                Para automatizar o Speed-to-Lead (ex: n8n, Zapier), envie uma requisição POST com o JSON abaixo para o seu servidor.
+            </p>
+
+            {/* Changed to flex-col to prevent overlapping/cramping of payload */}
+            <div className="flex flex-col gap-8">
+                <div className="space-y-4">
+                    <div className="space-y-2">
+                        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">URL do Endpoint</label>
+                        <div className="flex gap-2 items-center">
+                            <span className="bg-green-500/20 text-green-400 px-3 py-2 rounded text-sm font-mono border border-green-500/30 font-bold h-full flex items-center">POST</span>
+                            <div className="flex-1 bg-black rounded border border-slate-700 flex items-center justify-between pl-3 pr-1 py-2">
+                                <code className="text-sm text-slate-300 truncate font-mono">{webhookEndpoint}</code>
+                                <button onClick={() => copyToClipboard(webhookEndpoint, 'url')} className="p-1.5 hover:bg-slate-800 rounded text-slate-500 hover:text-white transition">
+                                    {copyStatus === 'url' ? <CheckCircle2 size={16} className="text-green-500"/> : <Copy size={16} />}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                     <div className="text-xs text-slate-500 bg-slate-950/50 p-3 rounded border border-slate-800/50">
+                        <p><strong>Notas:</strong></p>
+                        <ul className="list-disc list-inside space-y-1 mt-1">
+                            <li>O Endpoint requer que seu servidor local esteja rodando e o Ngrok conectado.</li>
+                            <li>O sistema primeiro liga para o <code>telefone_sdr</code> (Agente), sussurra os dados, e depois conecta ao <code>telefone_lead</code>.</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div className="space-y-2">
+                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Payload Exemplo (JSON)</label>
+                    <div className="bg-black rounded border border-slate-700 p-4 relative group">
+                        <button onClick={() => copyToClipboard(jsonExample, 'json')} className="absolute top-2 right-2 p-1.5 bg-slate-800 rounded text-slate-400 opacity-0 group-hover:opacity-100 transition hover:text-white z-10">
+                            {copyStatus === 'json' ? <CheckCircle2 size={14} className="text-green-500"/> : <Copy size={14} />}
+                        </button>
+                        <pre className="text-xs text-blue-300 font-mono leading-relaxed whitespace-pre-wrap overflow-x-auto">
+                            {jsonExample}
+                        </pre>
+                    </div>
+                </div>
+            </div>
         </div>
 
       </div>

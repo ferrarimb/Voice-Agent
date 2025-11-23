@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { Zap, User, Phone, Clock, AlertTriangle, Play, CheckCircle2, Webhook, Copy } from 'lucide-react';
+import { Zap, User, Phone, Clock, AlertTriangle, Play, CheckCircle2 } from 'lucide-react';
 import { TwilioConfig, CallLogEntry } from '../types';
 
 interface SpeedDialInterfaceProps {
@@ -14,28 +14,6 @@ const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({ onCallLog, n8nW
   const [sdrPhone, setSdrPhone] = useState(twilioConfig.fromNumber || '');
   const [isLoading, setIsLoading] = useState(false);
   const [status, setStatus] = useState<{ type: 'success' | 'error', msg: string } | null>(null);
-
-  // Determinar a URL base do webhook com base na configuração do Ngrok
-  let webhookBaseUrl = 'https://seu-ngrok.ngrok-free.app';
-  if (twilioConfig.webhookUrl) {
-      try {
-          // Extrai a origem se for uma URL completa
-          webhookBaseUrl = new URL(twilioConfig.webhookUrl).origin;
-      } catch (e) {
-          // Se for inválido, usa o valor bruto como fallback se parecer uma URL
-          if(twilioConfig.webhookUrl.startsWith('http')) {
-             webhookBaseUrl = twilioConfig.webhookUrl;
-          }
-      }
-  }
-  
-  const webhookEndpoint = `${webhookBaseUrl}/webhook/speed-dial`;
-
-  const copyToClipboard = (text: string) => {
-      navigator.clipboard.writeText(text);
-      setStatus({ type: 'success', msg: 'Copiado para a área de transferência!' });
-      setTimeout(() => setStatus(null), 2000);
-  };
 
   const handleTrigger = async () => {
     console.log("[Client DEBUG] Botão Disparar Pressionado");
@@ -100,10 +78,10 @@ const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({ onCallLog, n8nW
            timestamp: new Date().toISOString(),
            type: 'pstn',
            status: 'success',
-           assistantName: 'Speed Dial Bridge',
+           assistantName: 'Ponte SDR', // Renamed from Speed Dial Bridge
            to: lead.phone,
            from: sdrPhone,
-           errorMessage: 'Bridge Initiated'
+           errorMessage: 'Ponte Iniciada' // Renamed from Bridge Initiated
         });
       } else {
         setStatus({ type: 'error', msg: data.error || 'Failed to trigger call.' });
@@ -119,17 +97,6 @@ const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({ onCallLog, n8nW
     }
   };
 
-  // JSON Example com os campos em Português e Credenciais
-  const jsonExample = `{
-  "nome_lead": "Maria Souza",
-  "data_agendamento": "14:00",
-  "telefone_lead": "+5511999998888",
-  "telefone_sdr": "${sdrPhone || '+5511999997777'}",
-  "TWILIO_ACCOUNT_SID": "${twilioConfig.accountSid || 'AC...'}",
-  "TWILIO_AUTH_TOKEN": "${twilioConfig.authToken ? '*******' : '...'}",
-  "TWILIO_FROM_NUMBER": "${twilioConfig.fromNumber || '+1...'}"
-}`;
-
   return (
     <div className="flex-1 bg-slate-950 h-screen overflow-y-auto">
        <header className="h-16 border-b border-slate-800 bg-slate-900/50 flex items-center justify-between px-8 sticky top-0 backdrop-blur-sm z-10">
@@ -137,7 +104,7 @@ const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({ onCallLog, n8nW
             <div className="p-2 bg-orange-500/10 rounded-lg text-orange-500">
                 <Zap size={20} />
             </div>
-            <h1 className="text-white font-semibold text-lg">Speed-to-Lead Bridge</h1>
+            <h1 className="text-white font-semibold text-lg">Ponte SDR</h1>
         </div>
       </header>
 
@@ -170,7 +137,7 @@ const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({ onCallLog, n8nW
             </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <div className="max-w-2xl mx-auto">
             {/* Form Section */}
             <div className="space-y-6">
                 <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
@@ -251,55 +218,10 @@ const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({ onCallLog, n8nW
                                 <span className="animate-pulse">Iniciando...</span>
                             ) : (
                                 <>
-                                    <Play size={20} fill="currentColor" /> Disparar Bridge Manual
+                                    <Play size={20} fill="currentColor" /> Disparar Ponte Manual
                                 </>
                             )}
                         </button>
-                    </div>
-                </div>
-            </div>
-
-            {/* Webhook Info Panel */}
-            <div className="space-y-6">
-                 <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 h-full border-l-4 border-l-blue-500">
-                    <div className="flex items-center gap-2 mb-4 pb-4 border-b border-slate-800 text-blue-400">
-                        <Webhook size={20} />
-                        <h3 className="font-medium">Integração via Webhook</h3>
-                    </div>
-
-                    <p className="text-sm text-slate-400 mb-6">
-                        Para automatizar (ex: n8n, Zapier), envie uma requisição POST com o JSON abaixo.
-                        As credenciais da Twilio podem ser enviadas no corpo para maior flexibilidade.
-                    </p>
-
-                    <div className="space-y-6">
-                        <div className="space-y-2">
-                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">URL do Endpoint</label>
-                            <div className="flex gap-2">
-                                <span className="bg-green-500/20 text-green-400 px-3 py-2 rounded text-sm font-mono border border-green-500/30 font-bold">POST</span>
-                                <div className="flex-1 bg-black rounded border border-slate-700 flex items-center justify-between pl-3 pr-1 py-1">
-                                    <code className="text-xs text-slate-300 truncate font-mono">{webhookEndpoint}</code>
-                                    <button onClick={() => copyToClipboard(webhookEndpoint)} className="p-1.5 hover:bg-slate-800 rounded text-slate-500 hover:text-white transition">
-                                        <Copy size={14} />
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="space-y-2">
-                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Formato do JSON</label>
-                            <div className="bg-black rounded border border-slate-700 p-4 relative group">
-                                <button onClick={() => copyToClipboard(jsonExample)} className="absolute top-2 right-2 p-1.5 bg-slate-800 rounded text-slate-400 opacity-0 group-hover:opacity-100 transition hover:text-white">
-                                    <Copy size={14} />
-                                </button>
-                                <pre className="text-xs text-blue-300 font-mono leading-relaxed whitespace-pre-wrap">
-                                    {jsonExample}
-                                </pre>
-                            </div>
-                            <p className="text-[10px] text-slate-500 mt-2">
-                                * Se você não enviar as chaves TWILIO_*, o sistema tentará usar as configuradas no arquivo .env do servidor.
-                            </p>
-                        </div>
                     </div>
                 </div>
             </div>

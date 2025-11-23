@@ -9,9 +9,16 @@ import LogsView from './components/LogsView';
 import SettingsView from './components/SettingsView';
 import { AssistantConfig, VoiceName, View, CallLogEntry, LogEntry, AppSettings, TwilioConfig } from './types';
 
-const DEFAULT_SYSTEM_INSTRUCTION = `You are a helpful, witty, and concise AI voice assistant. 
-Your task is to help the user with quick queries, simulate a phone support agent, or just chat.
-Keep responses relatively short to maintain a conversational flow.`;
+const DEFAULT_SYSTEM_INSTRUCTION = `Você é a Bianca, uma assistente virtual especialista em agendamentos de uma imobiliária. 
+Seu objetivo principal é qualificar o cliente e agendar uma visita presencial ao imóvel de interesse.
+Seja extremamente cordial, profissional e levemente persuasiva.
+Mantenha suas respostas curtas (máximo de 2 frases) para garantir a fluidez da conversa por voz.
+Siga este roteiro básico:
+1. Identifique o interesse do cliente no imóvel.
+2. Pergunte o nome do cliente se ainda não souber.
+3. Pergunte qual o melhor período para a visita (manhã ou tarde).
+4. Ofereça um horário específico e tente obter a confirmação ("posso confirmar?").
+Se o cliente perguntar detalhes técnicos que você não sabe, diga que o corretor especialista poderá esclarecer tudo durante a visita.`;
 
 const DEFAULT_N8N_WEBHOOK = 'https://webhook-editor.abianca.com.br/webhook/retorno-new-vapi-ae75-6dfccb8f37d4';
 const DEFAULT_OPENAI_KEY = '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';
@@ -51,10 +58,10 @@ const App: React.FC = () => {
   });
 
   const [config, setConfig] = useState<AssistantConfig>({
-    name: 'Customer Support Bot v1',
+    name: 'Agente de Agendamento',
     systemInstruction: DEFAULT_SYSTEM_INSTRUCTION,
-    voice: VoiceName.Puck,
-    firstMessage: 'Hello! How can I help you today?',
+    voice: VoiceName.Kore,
+    firstMessage: 'Olá! Aqui é a Bianca da Imobiliária. Vi que você se interessou pelo imóvel no centro. Como posso ajudar?',
     transcriberModel: 'nova-2',
     model: 'gemini-2.5-flash-native-audio-preview-09-2025'
   });
