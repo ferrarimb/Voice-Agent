@@ -117,6 +117,7 @@ const App: React.FC = () => {
         {currentView === 'speed-dial' && (
           <SpeedDialInterface 
             onCallLog={handleCallLog}
+            n8nWebhookUrl={appSettings.n8nWebhookUrl}
           />
         )}
 

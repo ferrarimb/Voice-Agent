@@ -5,9 +5,10 @@ import { TwilioConfig, CallLogEntry } from '../types';
 
 interface SpeedDialInterfaceProps {
   onCallLog: (log: CallLogEntry) => void;
+  n8nWebhookUrl?: string;
 }
 
-const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({ onCallLog }) => {
+const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({ onCallLog, n8nWebhookUrl }) => {
   const [lead, setLead] = useState({ name: '', phone: '', context: 'Imóvel Centro' });
   const [sdrPhone, setSdrPhone] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -61,6 +62,7 @@ const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({ onCallLog }) =>
       lead_phone: lead.phone,
       sdr_phone: sdrPhone,
       horario: lead.context,
+      n8n_url: n8nWebhookUrl, // Pass the webhook URL to the backend
       // Pass config to backend since it's a stateless demo server
       twilio_config: {
         accountSid: twilioConfig.accountSid,
@@ -135,6 +137,7 @@ const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({ onCallLog }) =>
                 2. Verifica se é humano (ignora Caixa Postal).
                 3. "Sussurra" os dados do Lead no ouvido do SDR.
                 4. Conecta a chamada ao <strong>Lead</strong>.
+                5. <strong className="text-orange-400">Novidade:</strong> Grava e transcreve a conversa.
             </p>
         </div>
 
@@ -224,6 +227,11 @@ const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({ onCallLog }) =>
                         <div className="flex items-center gap-3 text-sm text-slate-400">
                              <div className="w-8 h-8 rounded-full bg-green-500/20 text-green-400 flex items-center justify-center font-bold">4</div>
                              <span>Conecta com <strong>{lead.phone || '...'}</strong></span>
+                        </div>
+                        <div className="h-4 border-l border-dashed border-slate-700 ml-4"></div>
+                        <div className="flex items-center gap-3 text-sm text-slate-400">
+                             <div className="w-8 h-8 rounded-full bg-slate-700 text-white flex items-center justify-center font-bold text-[10px]">REC</div>
+                             <span>Gravação e Transcrição (Server)</span>
                         </div>
                     </div>
                 </div>
