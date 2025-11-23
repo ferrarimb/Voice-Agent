@@ -15,25 +15,25 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange }) => {
         <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white">
             <PhoneCall size={20} />
         </div>
-        <span className="text-white font-bold text-xl hidden md:block">Voice Agent</span>
+        <span className="text-white font-bold text-xl hidden md:block">Bianca Voice Agent</span>
       </div>
 
       <nav className="flex-1 py-6 space-y-2 px-2">
         <SidebarItem 
           icon={<Bot size={20} />} 
-          label="Assistants" 
+          label="Agentes" 
           active={currentView === 'assistants'} 
           onClick={() => onViewChange('assistants')}
         />
         <SidebarItem 
           icon={<Phone size={20} />} 
-          label="Phone Numbers" 
+          label="Ligação" 
           active={currentView === 'phone'} 
           onClick={() => onViewChange('phone')}
         />
         <SidebarItem 
           icon={<Zap size={20} />} 
-          label="Speed Dial" 
+          label="Conexão SDR->Lead" 
           active={currentView === 'speed-dial'} 
           onClick={() => onViewChange('speed-dial')}
         />
@@ -45,7 +45,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange }) => {
         />
         <SidebarItem 
           icon={<Settings size={20} />} 
-          label="Settings" 
+          label="Configurações" 
           active={currentView === 'settings'} 
           onClick={() => onViewChange('settings')}
         />
