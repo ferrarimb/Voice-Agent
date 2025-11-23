@@ -18,21 +18,17 @@ export const makeTwilioCall = async (
   formData.append('To', to);
   formData.append('From', config.fromNumber);
 
-  // If a Webhook URL is provided, use it to hand off control to a real backend server (e.g., Vapi, Custom Node.js)
-  if (config.webhookUrl && config.webhookUrl.trim() !== '') {
-    let hookUrl = config.webhookUrl;
-    // Append the n8n webhook url to the stream server url so it knows where to send logs
-    if (n8nWebhookUrl) {
-       const separator = hookUrl.includes('?') ? '&' : '?';
-       hookUrl = `${hookUrl}${separator}n8n_url=${encodeURIComponent(n8nWebhookUrl)}`;
-    }
+  // Determine URL or TwiML
+  let hookUrl = config.webhookUrl;
+  if (hookUrl && n8nWebhookUrl) {
+     const separator = hookUrl.includes('?') ? '&' : '?';
+     hookUrl = `${hookUrl}${separator}n8n_url=${encodeURIComponent(n8nWebhookUrl)}`;
+  }
+
+  if (hookUrl) {
     formData.append('Url', hookUrl);
   } else {
-    // Improved Demo TwiML:
-    // 1. Says the message
-    // 2. "Listens" (Records) for 5 seconds to simulate conversation gap
-    // 3. Explains limitation nicely
-    const twiml = `
+    const fallbackTwiml = `
       <Response>
         <Pause length="1"/>
         <Say voice="alice" language="en-US">${message}</Say>
@@ -42,7 +38,7 @@ export const makeTwilioCall = async (
         <Pause length="1"/>
       </Response>
     `;
-    formData.append('Twiml', twiml);
+    formData.append('Twiml', fallbackTwiml);
   }
 
   try {
@@ -56,7 +52,7 @@ export const makeTwilioCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.json();
+      const errorData = await response.json().catch(() => ({}));
       return { success: false, error: errorData.message || response.statusText };
     }
 

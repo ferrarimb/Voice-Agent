@@ -2,8 +2,8 @@
 /**
  * Vapi Clone Backend - Twilio <-> OpenAI Realtime API (GPT-4o Audio)
  * 
- * DEBUG MODE: STABLE v8
- * Fixes: Speed Dial Recording + Transcription
+ * DEBUG MODE: STABLE v9 (Audio Quality Fix)
+ * Fixes: Speed Dial "Robotic/Doubled" Recording
  */
 
 require('dotenv').config();
@@ -178,7 +178,7 @@ fastify.post('/incoming', async (request, reply) => {
     reply.type('text/xml').send(twiml);
 });
 
-// 4. WebSocket Stream (Audio Bridge)
+// 5. WebSocket Stream (Audio Bridge)
 fastify.register(async (fastifyInstance) => {
     fastifyInstance.get('/media-stream', { websocket: true }, (connection, req) => {
         
@@ -213,13 +213,15 @@ fastify.register(async (fastifyInstance) => {
                     log('🤖 OpenAI Connected', "OPENAI");
                     isOpenAiConnected = true;
                     
-                    // Select system instruction based on mode
-                    const instruction = callMode === 'bridge' ? SYSTEM_MESSAGE_SCRIBE : SYSTEM_MESSAGE_AGENT;
+                    const isBridge = callMode === 'bridge';
+                    const instruction = isBridge ? SYSTEM_MESSAGE_SCRIBE : SYSTEM_MESSAGE_AGENT;
                     
+                    // CRITICAL FIX: For bridge mode, strictly disable audio output ('text' only).
+                    // This prevents OpenAI from hallucinating audio that causes echo/doubling in the recording.
                     const sessionConfig = {
                         type: 'session.update',
                         session: {
-                            modalities: ['text', 'audio'],
+                            modalities: isBridge ? ['text'] : ['text', 'audio'], 
                             instructions: instruction,
                             voice: VOICE,
                             input_audio_format: 'g711_ulaw',
@@ -241,8 +243,9 @@ fastify.register(async (fastifyInstance) => {
                             if (callMode === 'agent') checkAndSendGreeting();
                         } else if (event.type === 'response.audio.delta' && event.delta) {
                             if (streamSid) {
-                                // If in BRIDGE mode, OpenAI should be silent. But if it generates audio, 
-                                // WE MUST NOT forward it to Twilio, otherwise the humans will hear the AI interrupting.
+                                // If in BRIDGE mode, OpenAI should be silent. 
+                                // Due to modalities=['text'], this event should effectively NOT fire in bridge mode.
+                                
                                 if (callMode === 'agent') {
                                     // 1. Send to Twilio (User hears it)
                                     twilioWs.send(JSON.stringify({
@@ -250,14 +253,10 @@ fastify.register(async (fastifyInstance) => {
                                         streamSid: streamSid,
                                         media: { payload: event.delta }
                                     }));
-                                }
-                                
-                                // 2. Save to Buffer (Recording) - Only if Agent is speaking. 
-                                // In Bridge mode, we assume we only record Input (Mixed Human Audio) 
-                                // because OpenAI is silent.
-                                if (callMode === 'agent') {
-                                     const chunk = Buffer.from(event.delta, 'base64');
-                                     savedAudioChunks.push(chunk);
+                                    
+                                    // 2. Save to Buffer (Recording)
+                                    const chunk = Buffer.from(event.delta, 'base64');
+                                    savedAudioChunks.push(chunk);
                                 }
                             }
                         } else if (event.type === 'input_audio_buffer.speech_started') {
@@ -306,7 +305,6 @@ fastify.register(async (fastifyInstance) => {
                     }
                     log(`▶️ Stream Started. Mode: ${callMode}. Webhook: ${n8nUrl ? 'YES' : 'NO'}`, "TWILIO");
                     
-                    // In bridge mode, we are just a passive recorder/scribe.
                     connectToOpenAI();
 
                 } else if (data.event === 'media') {
@@ -338,8 +336,8 @@ fastify.register(async (fastifyInstance) => {
                                 const finalBuffer = Buffer.concat(savedAudioChunks);
                                 
                                 // Create WAV from G.711 u-law (8000Hz, Mono)
+                                // This is the standard Twilio stream format.
                                 const wav = new WaveFile();
-                                // '8m' = 8-bit mu-law
                                 wav.fromScratch(1, 8000, '8m', finalBuffer);
                                 
                                 const wavBuffer = wav.toBuffer();
