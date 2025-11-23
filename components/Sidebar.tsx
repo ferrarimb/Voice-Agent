@@ -39,7 +39,8 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange }) => {
 
       {/* Logo Area - No background, no border */}
       <div className="relative z-10 w-12 h-12 mb-10 group cursor-pointer flex items-center justify-center bg-transparent">
-          <img src="https://xtkorgedlxwfuaqyxguq.supabase.co/storage/v1/object/public/template-images/logo.png" alt="Bianca" className="w-full h-full object-contain opacity-80 group-hover:opacity-100 transition-opacity" />
+          <img src="https://xtkorgedlxwfuaqyxguq.supabase.co/storage/v1/object/public/template-images/logo.png" alt="Bianca" className="w-full h-full object-contain opacity-80 group-hover:opacity-100 transition-opacity duration-500" />
+          <div className="absolute inset-0 bg-white/20 blur-xl opacity-0 group-hover:opacity-40 transition-opacity duration-700 rounded-full"></div>
       </div>
 
       {/* Nav Items */}
@@ -87,19 +88,26 @@ const SidebarItem: React.FC<{ icon: React.ReactNode; label: string; active?: boo
   return (
     <div 
       onClick={onClick}
-      className={`group relative flex items-center justify-center w-full aspect-square rounded-2xl cursor-pointer transition-all duration-500 ease-out 
-        ${active ? 'bg-white/10 text-white shadow-[0_0_20px_rgba(255,255,255,0.1)]' : 'text-white/40 hover:text-white hover:bg-white/5'}`}
+      className={`group relative flex items-center justify-center w-full aspect-square rounded-2xl cursor-pointer transition-all duration-500 ease-[cubic-bezier(0.25,1,0.5,1)] 
+        ${active ? 'bg-white/10 text-white shadow-[0_4px_20px_rgba(0,0,0,0.2)] border border-white/10' : 'text-white/40 hover:text-white hover:bg-white/5 border border-transparent hover:border-white/5'}`}
       title={label}
     >
       {active && (
-        <div className="absolute inset-0 rounded-2xl bg-gradient-to-tr from-white/10 to-transparent opacity-50" />
+        <div className="absolute inset-0 rounded-2xl bg-gradient-to-b from-white/10 to-transparent opacity-100 animate-in fade-in duration-300" />
       )}
-      <div className={`relative z-10 transition-transform duration-300 ${active ? 'scale-110' : 'group-hover:scale-110'}`}>
+      
+      {/* Icon Wrapper for smoother transform */}
+      <div className={`relative z-10 transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)] ${active ? 'scale-110 drop-shadow-[0_0_8px_rgba(255,255,255,0.3)]' : 'group-hover:scale-110 group-hover:drop-shadow-[0_0_5px_rgba(255,255,255,0.2)]'}`}>
           {icon}
       </div>
       
+      {/* Active Indicator Dot */}
+      {active && (
+         <div className="absolute -left-1 top-1/2 -translate-y-1/2 w-1 h-8 bg-white rounded-r-full shadow-[0_0_10px_white] opacity-60"></div>
+      )}
+
       {/* Tooltip on hover */}
-      <div className="absolute left-full ml-4 px-3 py-1.5 glass-panel rounded-lg text-xs font-medium text-white opacity-0 -translate-x-2 pointer-events-none group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-200 whitespace-nowrap z-50">
+      <div className="absolute left-full ml-4 px-3 py-1.5 glass-panel rounded-lg text-xs font-medium text-white opacity-0 -translate-x-2 pointer-events-none group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-300 ease-out whitespace-nowrap z-50 backdrop-blur-xl bg-black/40 border border-white/10">
         {label}
       </div>
     </div>

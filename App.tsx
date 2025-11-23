@@ -141,48 +141,52 @@ const App: React.FC = () => {
       <Sidebar currentView={currentView} onViewChange={setCurrentView} />
       
       {/* Main Content Area */}
-      <main className="flex-1 flex flex-col relative z-10">
+      <main className="flex-1 flex flex-col relative z-10 overflow-hidden">
         
-        {currentView === 'assistants' && (
-          <AssistantConfigPanel 
-              config={config} 
-              setConfig={setConfig} 
-              onStartDemo={() => setIsCallActive(true)} 
-          />
-        )}
+        {/* Animated Wrapper: Key ensures re-mount + animation on view change */}
+        <div key={currentView} className="h-full w-full animate-enter">
+            {currentView === 'assistants' && (
+              <AssistantConfigPanel 
+                  config={config} 
+                  setConfig={setConfig} 
+                  onStartDemo={() => setIsCallActive(true)} 
+              />
+            )}
 
-        {currentView === 'phone' && (
-          <PhoneInterface 
-            assistantConfig={config} 
-            twilioConfig={twilioConfig}
-            onCallLog={handleCallLog}
-            n8nWebhookUrl={appSettings.n8nWebhookUrl}
-          />
-        )}
+            {currentView === 'phone' && (
+              <PhoneInterface 
+                assistantConfig={config} 
+                twilioConfig={twilioConfig}
+                onCallLog={handleCallLog}
+                n8nWebhookUrl={appSettings.n8nWebhookUrl}
+              />
+            )}
+            
+            {currentView === 'speed-dial' && (
+              <SpeedDialInterface 
+                twilioConfig={twilioConfig}
+                onCallLog={handleCallLog}
+                n8nWebhookUrl={appSettings.n8nWebhookUrl}
+                savedState={speedDialState}
+                onStateChange={handleSpeedDialChange}
+              />
+            )}
+
+            {currentView === 'logs' && (
+              <LogsView logs={callLogs} />
+            )}
+
+            {currentView === 'settings' && (
+              <SettingsView 
+                 settings={appSettings}
+                 twilioConfig={twilioConfig}
+                 onSave={handleSaveSettings}
+                 onSaveTwilioConfig={handleSaveTwilioConfig}
+              />
+            )}
+        </div>
         
-        {currentView === 'speed-dial' && (
-          <SpeedDialInterface 
-            twilioConfig={twilioConfig}
-            onCallLog={handleCallLog}
-            n8nWebhookUrl={appSettings.n8nWebhookUrl}
-            savedState={speedDialState}
-            onStateChange={handleSpeedDialChange}
-          />
-        )}
-
-        {currentView === 'logs' && (
-          <LogsView logs={callLogs} />
-        )}
-
-        {currentView === 'settings' && (
-          <SettingsView 
-             settings={appSettings}
-             twilioConfig={twilioConfig}
-             onSave={handleSaveSettings}
-             onSaveTwilioConfig={handleSaveTwilioConfig}
-          />
-        )}
-        
+        {/* Overlays (No animation wrapper to prevent re-mounts/jumps) */}
         {isCallActive && (
             <ActiveCallModal 
                 config={config} 
@@ -192,7 +196,7 @@ const App: React.FC = () => {
         
         {/* Footer Disclaimer */}
         {currentView !== 'settings' && (
-            <div className="absolute bottom-4 right-8 text-[10px] text-white/10 max-w-md text-right pointer-events-none hidden md:block mix-blend-overlay font-medium tracking-widest uppercase">
+            <div className="absolute bottom-4 right-8 text-[10px] text-white/10 max-w-md text-right pointer-events-none hidden md:block mix-blend-overlay font-medium tracking-widest uppercase animate-enter" style={{animationDelay: '0.5s'}}>
                 Bianca Voice OS • Gemini Live
             </div>
         )}
