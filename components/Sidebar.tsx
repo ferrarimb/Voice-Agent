@@ -35,38 +35,38 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange }) => {
 
   return (
     <div 
-      className={`h-screen z-30 flex flex-col py-6 relative border-r border-white/5 bg-black/20 backdrop-blur-xl
-        transition-[width] ease-[cubic-bezier(0.19,1,0.22,1)]
-        ${isExpanded ? 'w-72 duration-700' : 'w-20 delay-200 duration-700'}
+      className={`h-screen z-30 flex flex-col py-6 relative border-r border-white/5 bg-black/20 backdrop-blur-2xl
+        transition-all duration-500 ease-[cubic-bezier(0.25,0.8,0.25,1)]
+        ${isExpanded ? 'w-72' : 'w-20'}
       `}
     >
        {/* Background gradient/glass adjustments */}
        <div className="absolute inset-0 bg-gradient-to-b from-white/[0.02] to-transparent pointer-events-none" />
 
-      {/* Toggle Button */}
+      {/* Toggle Button - Perfectly centered on border */}
       <button 
         onClick={() => setIsExpanded(!isExpanded)}
-        className={`absolute -right-3 top-12 z-50 w-6 h-6 rounded-full bg-[#111] border border-white/10 flex items-center justify-center text-white/40 hover:text-white transition-all duration-300 hover:scale-110 shadow-lg hover:shadow-indigo-500/20 group`}
+        className={`absolute -right-3 top-10 z-50 w-6 h-6 rounded-full bg-[#0a0a0a] border border-white/10 flex items-center justify-center text-white/40 hover:text-white transition-all duration-300 hover:scale-110 shadow-[0_0_10px_rgba(0,0,0,0.5)] group`}
       >
-         <ChevronRight size={12} className={`transition-transform duration-700 ease-[cubic-bezier(0.19,1,0.22,1)] ${isExpanded ? 'rotate-180' : 'rotate-0'}`} />
+         <ChevronRight size={12} className={`transition-transform duration-500 ease-[cubic-bezier(0.25,0.8,0.25,1)] ${isExpanded ? 'rotate-180' : 'rotate-0'}`} />
       </button>
 
-      {/* Logo Area */}
+      {/* Logo Area - Fixed padding left ensures icon doesn't jump */}
       <div 
-        className={`relative z-10 mb-10 flex items-center transition-all duration-700 ease-[cubic-bezier(0.19,1,0.22,1)]
-          ${isExpanded ? 'px-8 justify-start gap-4' : 'px-0 justify-center'}
+        className={`relative z-10 mb-10 flex items-center pl-5
+          transition-all duration-500 ease-[cubic-bezier(0.25,0.8,0.25,1)]
         `}
       >
           <div 
             onClick={() => !isExpanded && setIsExpanded(true)}
-            className={`relative flex-shrink-0 cursor-pointer group transition-all duration-500 ${isExpanded ? 'w-8 h-8' : 'w-10 h-10'}`}
+            className={`relative flex-shrink-0 cursor-pointer group transition-all duration-500 flex items-center justify-center w-10 h-10`}
           >
-             <img src="https://xtkorgedlxwfuaqyxguq.supabase.co/storage/v1/object/public/template-images/logo.png" alt="Bianca" className="w-full h-full object-contain opacity-90 group-hover:opacity-100 transition-all duration-500" />
-             <div className="absolute inset-0 bg-white/20 blur-xl opacity-0 group-hover:opacity-30 transition-opacity duration-700 rounded-full"></div>
+             <img src="https://xtkorgedlxwfuaqyxguq.supabase.co/storage/v1/object/public/template-images/logo.png" alt="Bianca" className="w-full h-full object-contain opacity-90 group-hover:opacity-100 transition-all duration-300" />
+             <div className="absolute inset-0 bg-white/20 blur-xl opacity-0 group-hover:opacity-30 transition-opacity duration-500 rounded-full"></div>
           </div>
           
-          <div className={`flex flex-col justify-center overflow-hidden whitespace-nowrap transition-all ease-[cubic-bezier(0.19,1,0.22,1)]
-            ${isExpanded ? 'w-auto opacity-100 duration-500 delay-300' : 'w-0 opacity-0 duration-200'}
+          <div className={`flex flex-col justify-center overflow-hidden whitespace-nowrap transition-all duration-500 ease-[cubic-bezier(0.25,0.8,0.25,1)]
+            ${isExpanded ? 'max-w-[150px] opacity-100 ml-3 translate-x-0' : 'max-w-0 opacity-0 ml-0 -translate-x-4'}
           `}>
               <h1 className="text-white font-semibold tracking-tight text-lg leading-none">Bianca</h1>
               <p className="text-[10px] text-white/40 uppercase tracking-[0.2em] font-medium mt-1">Voice AI</p>
@@ -107,8 +107,8 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange }) => {
       
       {/* Bottom Actions */}
       <div className="w-full px-3 pb-6">
-        <div className={`h-px w-full bg-gradient-to-r from-transparent via-white/10 to-transparent mb-4 transition-opacity ease-linear
-             ${isExpanded ? 'opacity-100 duration-700 delay-300' : 'opacity-0 duration-200'}
+        <div className={`h-px w-full bg-gradient-to-r from-transparent via-white/10 to-transparent mb-4 transition-all duration-500 ease-out
+             ${isExpanded ? 'opacity-100 scale-100' : 'opacity-0 scale-90'}
         `} />
         <SidebarItem 
             icon={<Settings size={20} />} 
@@ -132,53 +132,47 @@ const SidebarItem: React.FC<{
   return (
     <div 
       onClick={onClick}
-      className={`group relative flex items-center rounded-xl cursor-pointer border border-transparent min-h-[48px]
-        transition-all ease-[cubic-bezier(0.19,1,0.22,1)]
-        ${expanded 
-            ? 'px-4 gap-4 w-full duration-500' // Smooth expand
-            : 'px-0 justify-center w-full duration-500' // Smooth collapse
-        }
+      className={`group relative flex items-center rounded-xl cursor-pointer border border-transparent min-h-[52px]
+        transition-all duration-300
         ${active 
-          ? 'bg-white/10 border-white/5 shadow-[0_4px_20px_rgba(0,0,0,0.2)]' 
+          ? 'bg-white/10 border-white/5 shadow-lg shadow-black/20' 
           : 'hover:bg-white/5 hover:border-white/5 text-white/40 hover:text-white'
         }
+        /* Fixed padding-left keeps icon stable during expansion */
+        pl-4
       `}
     >
-      {/* Active Gradient Background */}
-      {active && (
-        <div className="absolute inset-0 rounded-xl bg-gradient-to-r from-white/5 to-transparent opacity-100" />
-      )}
-      
-      {/* Icon Wrapper */}
-      <div className={`relative z-10 flex-shrink-0 transition-all duration-500 ${active ? 'text-white scale-105 drop-shadow-[0_0_8px_rgba(255,255,255,0.25)]' : 'group-hover:scale-105'}`}>
+      {/* Icon Wrapper - Fixed width container ensures exact alignment */}
+      <div className={`relative z-10 flex items-center justify-center w-6 h-6 flex-shrink-0 transition-transform duration-300 ${active ? 'text-white scale-110' : 'group-hover:scale-110'}`}>
           {icon}
       </div>
 
-      {/* Label (Expanded) */}
-      <div className={`z-10 overflow-hidden whitespace-nowrap transition-all ease-[cubic-bezier(0.19,1,0.22,1)]
+      {/* Label - Max Width Transition for smooth reveal */}
+      <div className={`
+         overflow-hidden whitespace-nowrap transition-all duration-500 ease-[cubic-bezier(0.25,0.8,0.25,1)]
          ${expanded 
-            ? 'w-auto opacity-100 translate-x-0 duration-500 delay-200' // Delay text appearance on expand
-            : 'w-0 opacity-0 -translate-x-4 duration-200' // Instant text hide on collapse
+            ? 'max-w-[200px] opacity-100 ml-4 translate-x-0' 
+            : 'max-w-0 opacity-0 ml-0 -translate-x-2'
          }
       `}>
           <span className={`text-sm font-medium tracking-wide ${active ? 'text-white' : 'text-white/80'}`}>{label}</span>
       </div>
       
-      {/* Active Indicator - Smooth Morph */}
+      {/* Active Indicator */}
       {active && (
-         <div className={`absolute bg-white rounded-full shadow-[0_0_12px_rgba(255,255,255,0.5)] transition-all duration-700 ease-[cubic-bezier(0.19,1,0.22,1)]
+         <div className={`absolute bg-white transition-all duration-500 ease-[cubic-bezier(0.25,0.8,0.25,1)] shadow-[0_0_10px_rgba(255,255,255,0.5)]
             ${expanded 
-                ? 'left-0 top-1/2 -translate-y-1/2 w-1 h-6 rounded-r-full opacity-100' // Side bar when expanded
-                : 'left-1/2 -translate-x-1/2 bottom-1 w-1 h-1 rounded-full opacity-80' // Dot when collapsed
+                ? 'left-0 top-1/2 -translate-y-1/2 w-1 h-8 rounded-r-full opacity-100' // Vertical bar
+                : 'left-1/2 -translate-x-1/2 bottom-1.5 w-1 h-1 rounded-full opacity-80' // Dot under icon
             }
          `}></div>
       )}
 
       {/* Tooltip (Collapsed only) */}
-      <div className={`
+       <div className={`
           absolute left-full ml-4 px-3 py-2 glass-panel rounded-lg text-xs font-medium text-white 
-          pointer-events-none transition-all duration-300 ease-out z-50 backdrop-blur-xl bg-black/80 border border-white/10 shadow-xl
-          ${!expanded ? 'group-hover:opacity-100 group-hover:translate-x-0 opacity-0 -translate-x-2' : 'hidden'}
+          pointer-events-none transition-all duration-200 z-50 backdrop-blur-xl bg-black/80 border border-white/10 shadow-xl
+          ${!expanded ? 'group-hover:opacity-100 group-hover:translate-x-0 opacity-0 -translate-x-2' : 'opacity-0 hidden'}
       `}>
           {label}
       </div>
