@@ -1,3 +1,4 @@
+
 export enum VoiceName {
   Puck = 'Puck',
   Charon = 'Charon',
@@ -48,4 +49,4 @@ export interface AppSettings {
   openaiApiKey?: string;
 }
 
-export type View = 'assistants' | 'phone' | 'logs' | 'settings';
+export type View = 'assistants' | 'phone' | 'logs' | 'settings' | 'speed-dial';

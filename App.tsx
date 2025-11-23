@@ -1,8 +1,10 @@
+
 import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import AssistantConfigPanel from './components/AssistantConfig';
 import ActiveCallModal from './components/ActiveCallModal';
 import PhoneInterface from './components/PhoneInterface';
+import SpeedDialInterface from './components/SpeedDialInterface';
 import LogsView from './components/LogsView';
 import SettingsView from './components/SettingsView';
 import { AssistantConfig, VoiceName, View, CallLogEntry, LogEntry, AppSettings } from './types';
@@ -47,12 +49,6 @@ const App: React.FC = () => {
       localStorage.setItem('app_settings', JSON.stringify(newSettings));
   };
 
-  const handleCallLog = (log: CallLogEntry) => {
-    const updatedLogs = [log, ...callLogs];
-    setCallLogs(updatedLogs);
-    localStorage.setItem('call_logs', JSON.stringify(updatedLogs));
-  };
-
   // Function to trigger n8n webhook
   const triggerAutomation = async (log: CallLogEntry) => {
     if (!appSettings.n8nWebhookUrl) return;
@@ -67,6 +63,15 @@ const App: React.FC = () => {
     } catch (err) {
         console.error('Failed to send to n8n', err);
     }
+  };
+
+  const handleCallLog = (log: CallLogEntry) => {
+    const updatedLogs = [log, ...callLogs];
+    setCallLogs(updatedLogs);
+    localStorage.setItem('call_logs', JSON.stringify(updatedLogs));
+    
+    // Trigger automation for ALL calls (Web, Twilio, SpeedDial)
+    triggerAutomation(log);
   };
 
   const handleWebCallEnd = (logs: LogEntry[]) => {
@@ -85,7 +90,6 @@ const App: React.FC = () => {
     };
     
     handleCallLog(logEntry);
-    triggerAutomation(logEntry); // Fire and forget to n8n
   };
 
   return (
@@ -105,6 +109,12 @@ const App: React.FC = () => {
         {currentView === 'phone' && (
           <PhoneInterface 
             assistantConfig={config} 
+            onCallLog={handleCallLog}
+          />
+        )}
+        
+        {currentView === 'speed-dial' && (
+          <SpeedDialInterface 
             onCallLog={handleCallLog}
           />
         )}

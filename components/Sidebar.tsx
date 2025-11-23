@@ -1,5 +1,6 @@
+
 import React from 'react';
-import { Phone, Settings, Activity, Bot, PhoneCall } from 'lucide-react';
+import { Phone, Settings, Activity, Bot, PhoneCall, Zap } from 'lucide-react';
 import { View } from '../types';
 
 interface SidebarProps {
@@ -29,6 +30,12 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange }) => {
           label="Phone Numbers" 
           active={currentView === 'phone'} 
           onClick={() => onViewChange('phone')}
+        />
+        <SidebarItem 
+          icon={<Zap size={20} />} 
+          label="Speed Dial" 
+          active={currentView === 'speed-dial'} 
+          onClick={() => onViewChange('speed-dial')}
         />
         <SidebarItem 
           icon={<Activity size={20} />} 

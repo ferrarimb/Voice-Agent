@@ -1,8 +1,9 @@
+
 /**
  * Vapi Clone Backend - Twilio <-> OpenAI Realtime API (GPT-4o Audio)
  * 
- * DEBUG MODE: STABLE v4
- * Fixes: WebSocket Access, Race Conditions, Crash Prevention
+ * DEBUG MODE: STABLE v5
+ * Fixes: CORS Preflight 404, URL Parsing
  */
 
 require('dotenv').config();
@@ -15,17 +16,37 @@ const fastify = Fastify();
 fastify.register(fastifyFormBody);
 fastify.register(fastifyWebsocket);
 
-const PORT = process.env.PORT || 5000;
-
-// Fallback Key (Only for local testing if .env fails)
-const TEST_KEY = "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";
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.trim() : TEST_KEY;
-
 // --- Helpers ---
 const log = (msg, type = 'INFO') => {
     const time = new Date().toISOString().split('T')[1].slice(0, -1);
     console.log(`[${time}] [${type}] ${msg}`);
 };
+
+// --- CORS & LOGGING HOOK ---
+// Intercepta TODAS as requisições para logar e aplicar CORS
+fastify.addHook('onRequest', (request, reply, done) => {
+    // 1. Log de Conexão
+    log(`INCOMING: ${request.method} ${request.url}`, "NETWORK");
+
+    // 2. Headers de CORS Manuais (Globais)
+    reply.header("Access-Control-Allow-Origin", "*");
+    reply.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    reply.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
+
+    // Se for OPTIONS global (fallback), responde OK
+    if (request.method === 'OPTIONS') {
+        reply.send();
+        return;
+    }
+    
+    done();
+});
+
+const PORT = process.env.PORT || 5000;
+
+// Fallback Key
+const TEST_KEY = "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";
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.trim() : TEST_KEY;
 
 if (!OPENAI_API_KEY) {
     log(`❌ FATAL: OPENAI_API_KEY missing.`, "SYSTEM");
@@ -45,14 +66,115 @@ const VOICE = 'alloy';
 
 // --- Routes ---
 
-// 1. Incoming Call (HTTP)
+// FIX: Explicit OPTIONS route to satisfy Fastify Router and prevent 404 on Preflight
+fastify.options('/trigger-call', async (request, reply) => {
+    return reply.send();
+});
+
+// 1. Trigger Call (Speed-to-Lead)
+fastify.post('/trigger-call', async (request, reply) => {
+    log(`[SPEED-DIAL] 🚀 Processando Trigger...`, "DEBUG");
+    
+    try {
+        const body = request.body;
+        
+        if (!body) {
+             log(`[SPEED-DIAL] ❌ Body vazio ou inválido`, "ERROR");
+             return reply.status(400).send({ success: false, error: "Body missing" });
+        }
+
+        log(`[SPEED-DIAL] Payload: ${JSON.stringify(body, null, 2)}`, "DEBUG");
+
+        const { lead_name, lead_phone, sdr_phone, horario, twilio_config } = body;
+        
+        if (!twilio_config || !twilio_config.accountSid || !twilio_config.authToken) {
+            log(`[SPEED-DIAL] ❌ Credenciais Twilio ausentes`, "ERROR");
+            return reply.status(400).send({ success: false, error: 'Missing Twilio Config' });
+        }
+
+        const auth = Buffer.from(`${twilio_config.accountSid}:${twilio_config.authToken}`).toString('base64');
+        const callbackUrl = `${twilio_config.baseUrl}/connect-lead?lead_name=${encodeURIComponent(lead_name)}&lead_phone=${encodeURIComponent(lead_phone)}&horario=${encodeURIComponent(horario)}`;
+
+        log(`[SPEED-DIAL] Callback TwiML: ${callbackUrl}`, "DEBUG");
+
+        const formData = new URLSearchParams();
+        formData.append('To', sdr_phone);
+        formData.append('From', twilio_config.fromNumber);
+        formData.append('Url', callbackUrl); 
+        formData.append('MachineDetection', 'Enable'); 
+
+        log(`[SPEED-DIAL] Enviando request para Twilio API...`, "DEBUG");
+
+        const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${twilio_config.accountSid}/Calls.json`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Basic ${auth}`,
+                'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            body: formData
+        });
+
+        if (!response.ok) {
+            const err = await response.json();
+            log(`[SPEED-DIAL] ❌ Erro Twilio: ${JSON.stringify(err)}`, "ERROR");
+            return reply.send({ success: false, error: err.message });
+        }
+        
+        const result = await response.json();
+        log(`[SPEED-DIAL] ✅ Sucesso! Call SID: ${result.sid}`, "SUCCESS");
+        
+        return reply.send({ success: true, sid: result.sid });
+    } catch (e) {
+        log(`[SPEED-DIAL] ❌ Exception: ${e.message}`, "FATAL");
+        return reply.status(500).send({ success: false, error: e.message });
+    }
+});
+
+// 2. Connect Lead (TwiML Webhook)
+fastify.all('/connect-lead', async (request, reply) => {
+    log(`[SPEED-DIAL] 📞 Webhook /connect-lead recebido`, "DEBUG");
+    
+    const queryParams = request.query || {};
+    const bodyParams = request.body || {};
+
+    const { lead_name, lead_phone, horario } = queryParams;
+    const { AnsweredBy, CallSid } = bodyParams;
+
+    log(`[SPEED-DIAL] Params: lead=${lead_name}, answered_by=${AnsweredBy}`, "DEBUG");
+
+    if (AnsweredBy && (AnsweredBy.startsWith('machine') || AnsweredBy === 'fax')) {
+        log(`[SPEED-DIAL] 🤖 Máquina (${AnsweredBy}). Desligando.`, "BRIDGE");
+        const twiml = `
+        <Response>
+            <Hangup/>
+        </Response>`;
+        return reply.type('text/xml').send(twiml);
+    }
+
+    log(`[SPEED-DIAL] 👤 Humano (${AnsweredBy || 'unknown'}). Conectando...`, "BRIDGE");
+    
+    const twiml = `
+    <Response>
+        <Say voice="Polly.Camila-Neural" language="pt-BR">
+            Novo lead: ${lead_name || 'Cliente'} para ${horario || 'agora'}. Conectando.
+        </Say>
+        <Dial callerId="${bodyParams.From || ''}">
+            ${lead_phone}
+        </Dial>
+    </Response>
+    `;
+    
+    reply.type('text/xml').send(twiml);
+});
+
+
+// 3. Incoming Call (Standard AI Agent)
 fastify.post('/incoming', async (request, reply) => {
     const host = request.headers.host;
-    log(`📞 Incoming Call! Host: ${host}`, "TWILIO");
+    log(`📞 Incoming AI Call! Host: ${host}`, "TWILIO");
     
     const wssUrl = `wss://${host}/media-stream`;
-    log(`🔗 Returning TwiML with Stream URL: ${wssUrl}`, "TWILIO");
-
+    
     const twiml = `
     <Response>
         <Connect>
@@ -64,12 +186,10 @@ fastify.post('/incoming', async (request, reply) => {
     reply.type('text/xml').send(twiml);
 });
 
-// 2. WebSocket Stream (Audio Bridge)
+// 4. WebSocket Stream (Audio Bridge)
 fastify.register(async (fastifyInstance) => {
     fastifyInstance.get('/media-stream', { websocket: true }, (connection, req) => {
         
-        // CRITICAL FIX: Safe socket extraction
-        // Depending on fastify-websocket version, it might be connection.socket or connection itself
         const twilioWs = connection.socket || connection;
         
         if (!twilioWs) {
@@ -101,7 +221,6 @@ fastify.register(async (fastifyInstance) => {
                     log('🤖 OpenAI Connected', "OPENAI");
                     isOpenAiConnected = true;
                     
-                    // Initialize Session
                     const sessionConfig = {
                         type: 'session.update',
                         session: {
@@ -126,7 +245,6 @@ fastify.register(async (fastifyInstance) => {
                         const event = JSON.parse(data.toString());
 
                         if (event.type === 'session.updated') {
-                            log('✅ Session Updated', "OPENAI");
                             isSessionUpdated = true;
                             checkAndSendGreeting();
                         } else if (event.type === 'response.audio.delta' && event.delta) {
@@ -138,7 +256,6 @@ fastify.register(async (fastifyInstance) => {
                                 }));
                             }
                         } else if (event.type === 'input_audio_buffer.speech_started') {
-                            log('🗣️ User speaking (Interrupt)', "OPENAI");
                             if (streamSid) {
                                 twilioWs.send(JSON.stringify({ event: 'clear', streamSid: streamSid }));
                                 openAiWs.send(JSON.stringify({ type: 'response.cancel' }));
@@ -150,7 +267,7 @@ fastify.register(async (fastifyInstance) => {
                 });
 
                 openAiWs.on('close', (code, reason) => {
-                    log(`💀 OpenAI Closed: ${code} ${reason}`, "OPENAI");
+                    log(`💀 OpenAI Closed`, "OPENAI");
                     isOpenAiConnected = false;
                 });
 
@@ -191,10 +308,8 @@ fastify.register(async (fastifyInstance) => {
             if (openAiWs) openAiWs.close();
         });
 
-        // --- Sincronização ---
         const checkAndSendGreeting = () => {
             if (streamSid && isSessionUpdated && !hasSentGreeting) {
-                log('⚡ Triggering Greeting...', "SYSTEM");
                 openAiWs.send(JSON.stringify({
                     type: 'response.create',
                     response: {
@@ -206,12 +321,10 @@ fastify.register(async (fastifyInstance) => {
             }
         };
 
-        // Start
         connectToOpenAI();
     });
 });
 
-// --- Start Server ---
 fastify.listen({ port: PORT, host: '0.0.0.0' }, (err) => {
     if (err) {
         log(`Failed to start server: ${err.message}`, "FATAL");
