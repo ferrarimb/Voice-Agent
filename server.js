@@ -2,8 +2,11 @@
 /**
  * Vapi Clone Backend - Twilio <-> OpenAI Realtime API (GPT-4o Audio)
  * 
- * DEBUG MODE: STABLE v9 (Audio Quality Fix)
- * Fixes: Speed Dial "Robotic/Doubled" Recording
+ * DEBUG MODE: STABLE v11 (Audio Resampling + PT-BR Bias)
+ * Fixes: 
+ * 1. Upsampling 8kHz -> 16kHz to fix "robotic/slow" playback.
+ * 2. Explicit Portuguese System Instructions for better transcription.
+ * 3. Manual WAV header construction for maximum compatibility.
  */
 
 require('dotenv').config();
@@ -12,7 +15,6 @@ const fastifyWebsocket = require('@fastify/websocket');
 const fastifyFormBody = require('@fastify/formbody');
 const WebSocket = require('ws');
 const { createClient } = require('@supabase/supabase-js');
-const { WaveFile } = require('wavefile');
 const crypto = require('crypto');
 
 const fastify = Fastify();
@@ -24,6 +26,78 @@ const log = (msg, type = 'INFO') => {
     const time = new Date().toISOString().split('T')[1].slice(0, -1);
     console.log(`[${time}] [${type}] ${msg}`);
 };
+
+// --- AUDIO PROCESSING UTILS ---
+
+// 1. G.711 u-law to Linear PCM 16-bit Lookup Table
+const muLawToLinear16 = new Int16Array(256);
+for (let i = 0; i < 256; i++) {
+    let mu = ~i;
+    let sign = (mu & 0x80) >> 7;
+    let exponent = (mu & 0x70) >> 4;
+    let mantissa = mu & 0x0f;
+    let sample = mantissa << (exponent + 3);
+    sample += 0x84 << exponent;
+    sample -= 0x84;
+    if (sign === 0) sample = -sample;
+    muLawToLinear16[i] = sample;
+}
+
+// 2. Decode Buffer (u-law) to Int16Array (PCM)
+function decodeMuLawBuffer(buffer) {
+    const int16 = new Int16Array(buffer.length);
+    for (let i = 0; i < buffer.length; i++) {
+        int16[i] = muLawToLinear16[buffer[i]];
+    }
+    return int16;
+}
+
+// 3. Upsample 8000Hz -> 16000Hz (Linear Interpolation)
+// Fixes "Robotic/Slow" audio on web players
+function upsample8kTo16k(inputInt16) {
+    const output = new Int16Array(inputInt16.length * 2);
+    for (let i = 0; i < inputInt16.length - 1; i++) {
+        const current = inputInt16[i];
+        const next = inputInt16[i + 1];
+        
+        // Sample 1: Original
+        output[i * 2] = current;
+        // Sample 2: Interpolated (Average)
+        output[i * 2 + 1] = Math.floor((current + next) / 2);
+    }
+    // Handle last sample
+    output[output.length - 2] = inputInt16[inputInt16.length - 1];
+    output[output.length - 1] = inputInt16[inputInt16.length - 1];
+    
+    return output;
+}
+
+// 4. Create WAV Header (16kHz, 16-bit, Mono)
+function createWavHeader(dataLength) {
+    const buffer = Buffer.alloc(44);
+    
+    // RIFF chunk
+    buffer.write('RIFF', 0);
+    buffer.writeUInt32LE(36 + dataLength, 4); // File size - 8
+    buffer.write('WAVE', 8);
+    
+    // fmt chunk
+    buffer.write('fmt ', 12);
+    buffer.writeUInt32LE(16, 16); // Chunk size (16 for PCM)
+    buffer.writeUInt16LE(1, 20);  // Audio format (1 = PCM)
+    buffer.writeUInt16LE(1, 22);  // Num channels (1 = Mono)
+    buffer.writeUInt32LE(16000, 24); // Sample rate (16kHz)
+    buffer.writeUInt32LE(32000, 28); // Byte rate (SampleRate * BlockAlign) -> 16000 * 2
+    buffer.writeUInt16LE(2, 32);  // Block align (NumChannels * BitsPerSample/8) -> 1 * 16/8 = 2
+    buffer.writeUInt16LE(16, 34); // Bits per sample
+    
+    // data chunk
+    buffer.write('data', 36);
+    buffer.writeUInt32LE(dataLength, 40);
+    
+    return buffer;
+}
+
 
 // --- SUPABASE CONFIG ---
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://xtkorgedlxwfuaqyxguq.supabase.co';
@@ -63,11 +137,14 @@ Your output audio format is G711 u-law.
 Always respond quickly and concisely.
 `.trim();
 
+// Updated for Portuguese Bias
 const SYSTEM_MESSAGE_SCRIBE = `
-You are a silent transcriber. 
-You are listening to a conversation between two people.
-DO NOT SPEAK. DO NOT GENERATE AUDIO.
-Your only job is to transcribe what you hear.
+INSTRUÇÃO PRINCIPAL: O idioma desta chamada é PORTUGUÊS (BRASIL).
+Você é um transcritor silencioso. Você está ouvindo uma chamada telefônica.
+NÃO FALE. NÃO GERE ÁUDIO.
+Sua única tarefa é transcrever o que ouve.
+Priorize a compreensão do Português.
+Se ouvir Inglês, transcreva em Inglês.
 `.trim();
 
 const VOICE = 'alloy';
@@ -122,7 +199,7 @@ fastify.post('/trigger-call', async (request, reply) => {
     }
 });
 
-// 2. Connect Lead (TwiML Webhook) - UPDATED FOR RECORDING
+// 2. Connect Lead (TwiML Webhook)
 fastify.all('/connect-lead', async (request, reply) => {
     const queryParams = request.query || {};
     const bodyParams = request.body || {};
@@ -195,6 +272,8 @@ fastify.register(async (fastifyInstance) => {
         const transcripts = [];
         // Buffer to store G.711 u-law chunks
         let savedAudioChunks = [];
+        // Buffer to store audio meant for OpenAI before connection is ready
+        let openAiAudioQueue = [];
 
         log(`🔌 Socket Connection Initiated`, "TWILIO");
 
@@ -216,8 +295,6 @@ fastify.register(async (fastifyInstance) => {
                     const isBridge = callMode === 'bridge';
                     const instruction = isBridge ? SYSTEM_MESSAGE_SCRIBE : SYSTEM_MESSAGE_AGENT;
                     
-                    // CRITICAL FIX: For bridge mode, strictly disable audio output ('text' only).
-                    // This prevents OpenAI from hallucinating audio that causes echo/doubling in the recording.
                     const sessionConfig = {
                         type: 'session.update',
                         session: {
@@ -231,6 +308,18 @@ fastify.register(async (fastifyInstance) => {
                         }
                     };
                     openAiWs.send(JSON.stringify(sessionConfig));
+
+                    // FLUSH BUFFERED AUDIO TO OPENAI
+                    if (openAiAudioQueue.length > 0) {
+                        log(`⚡ Flushing ${openAiAudioQueue.length} buffered chunks to OpenAI`, "BUFFER");
+                        while (openAiAudioQueue.length > 0) {
+                            const chunk = openAiAudioQueue.shift();
+                            openAiWs.send(JSON.stringify({
+                                type: 'input_audio_buffer.append',
+                                audio: chunk
+                            }));
+                        }
+                    }
                 });
 
                 openAiWs.on('message', (data) => {
@@ -239,25 +328,18 @@ fastify.register(async (fastifyInstance) => {
 
                         if (event.type === 'session.updated') {
                             isSessionUpdated = true;
-                            // Only send greeting if we are the active agent
                             if (callMode === 'agent') checkAndSendGreeting();
                         } else if (event.type === 'response.audio.delta' && event.delta) {
-                            if (streamSid) {
-                                // If in BRIDGE mode, OpenAI should be silent. 
-                                // Due to modalities=['text'], this event should effectively NOT fire in bridge mode.
-                                
-                                if (callMode === 'agent') {
-                                    // 1. Send to Twilio (User hears it)
-                                    twilioWs.send(JSON.stringify({
-                                        event: 'media',
-                                        streamSid: streamSid,
-                                        media: { payload: event.delta }
-                                    }));
-                                    
-                                    // 2. Save to Buffer (Recording)
-                                    const chunk = Buffer.from(event.delta, 'base64');
-                                    savedAudioChunks.push(chunk);
-                                }
+                            if (streamSid && callMode === 'agent') {
+                                // 1. Send to Twilio
+                                twilioWs.send(JSON.stringify({
+                                    event: 'media',
+                                    streamSid: streamSid,
+                                    media: { payload: event.delta }
+                                }));
+                                // 2. Save to Buffer
+                                const chunk = Buffer.from(event.delta, 'base64');
+                                savedAudioChunks.push(chunk);
                             }
                         } else if (event.type === 'input_audio_buffer.speech_started') {
                             if (streamSid && callMode === 'agent') {
@@ -267,13 +349,11 @@ fastify.register(async (fastifyInstance) => {
                         } else if (event.type === 'conversation.item.input_audio_transcription.completed') {
                             const text = event.transcript;
                             if (text) {
-                                // In Bridge mode, "User" is actually "Mixed SDR + Lead".
                                 const role = callMode === 'bridge' ? 'conversation' : 'user';
                                 log(`${role}: ${text}`, "TRANSCRIPT");
                                 transcripts.push({ role: role, message: text, timestamp: new Date() });
                             }
                         } else if (event.type === 'response.done') {
-                             // AI response transcripts (only relevant in Agent mode)
                             const outputItems = event.response?.output || [];
                             for (const item of outputItems) {
                                 if (item.content) {
@@ -308,18 +388,20 @@ fastify.register(async (fastifyInstance) => {
                     connectToOpenAI();
 
                 } else if (data.event === 'media') {
-                    // 1. Save User (or Mixed Bridge) Audio to Buffer
+                    // 1. Save User (or Mixed Bridge) Audio
                     if (data.media.payload) {
                         const chunk = Buffer.from(data.media.payload, 'base64');
                         savedAudioChunks.push(chunk);
-                    }
 
-                    // 2. Send to OpenAI
-                    if (isOpenAiConnected && openAiWs.readyState === WebSocket.OPEN) {
-                        openAiWs.send(JSON.stringify({
-                            type: 'input_audio_buffer.append',
-                            audio: data.media.payload
-                        }));
+                        // 2. Send to OpenAI
+                        if (isOpenAiConnected && openAiWs.readyState === WebSocket.OPEN) {
+                            openAiWs.send(JSON.stringify({
+                                type: 'input_audio_buffer.append',
+                                audio: data.media.payload
+                            }));
+                        } else {
+                            openAiAudioQueue.push(data.media.payload);
+                        }
                     }
 
                 } else if (data.event === 'stop') {
@@ -329,24 +411,35 @@ fastify.register(async (fastifyInstance) => {
                     if (n8nUrl) {
                         let recordingUrl = null;
 
-                        // --- AUDIO PROCESSING ---
+                        // --- AUDIO PROCESSING (UPSAMPLE 8k -> 16k) ---
                         if (savedAudioChunks.length > 0) {
                             try {
-                                log(`💾 Encoding WAV (${savedAudioChunks.length} chunks)...`, "AUDIO");
-                                const finalBuffer = Buffer.concat(savedAudioChunks);
+                                log(`💾 Processing ${savedAudioChunks.length} chunks...`, "AUDIO");
                                 
-                                // Create WAV from G.711 u-law (8000Hz, Mono)
-                                // This is the standard Twilio stream format.
-                                const wav = new WaveFile();
-                                wav.fromScratch(1, 8000, '8m', finalBuffer);
+                                // 1. Concatenate raw u-law chunks
+                                const uLawBuffer = Buffer.concat(savedAudioChunks);
                                 
-                                const wavBuffer = wav.toBuffer();
+                                // 2. Decode u-law to PCM Int16 (8000Hz)
+                                const pcm8k = decodeMuLawBuffer(uLawBuffer);
+                                
+                                // 3. Upsample to 16000Hz (Fixes playback speed/robotic issues)
+                                const pcm16k = upsample8kTo16k(pcm8k);
+                                
+                                // 4. Create WAV Header for 16000Hz Mono
+                                const wavHeader = createWavHeader(pcm16k.byteLength);
+                                
+                                // 5. Combine Header + Data
+                                const finalWavBuffer = Buffer.concat([
+                                    wavHeader, 
+                                    Buffer.from(pcm16k.buffer)
+                                ]);
+
                                 const fileName = `call_${callMode}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.wav`;
 
                                 const { data: uploadData, error: uploadError } = await supabase
                                     .storage
                                     .from('audios') 
-                                    .upload(fileName, wavBuffer, {
+                                    .upload(fileName, finalWavBuffer, {
                                         contentType: 'audio/wav',
                                         upsert: false
                                     });
@@ -354,7 +447,6 @@ fastify.register(async (fastifyInstance) => {
                                 if (uploadError) {
                                     log(`❌ Supabase Upload Error: ${uploadError.message}`, "ERROR");
                                 } else {
-                                    // Get Public URL
                                     const { data: publicUrlData } = supabase
                                         .storage
                                         .from('audios')
