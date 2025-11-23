@@ -32,6 +32,7 @@ export interface CallLogEntry {
   id: string;
   timestamp: string; // ISO string for serialization
   type: 'pstn' | 'web'; // Distinguish between Twilio and Browser
+  source?: 'direct_call' | 'bridge' | 'live_demo'; // Source of the call
   to?: string;
   from?: string;
   status: 'success' | 'failed';

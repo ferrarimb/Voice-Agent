@@ -1,4 +1,5 @@
 
+
 import React, { useState, useEffect } from 'react';
 import { Phone, Delete, Loader2 } from 'lucide-react';
 import { TwilioConfig, AssistantConfig, CallLogEntry } from '../types';
@@ -38,6 +39,7 @@ const PhoneInterface: React.FC<PhoneInterfaceProps> = ({ assistantConfig, twilio
         id: Date.now().toString(),
         timestamp: new Date().toISOString(),
         type: 'pstn',
+        source: 'direct_call',
         to: phoneNumber,
         from: twilioConfig.fromNumber || 'Unknown',
         status: result.success ? 'success' : 'failed',

@@ -1,3 +1,5 @@
+
+
 import React, { useState } from 'react';
 import { User, Phone, Clock, AlertTriangle, Play, CheckCircle2, Loader2 } from 'lucide-react';
 import { TwilioConfig, CallLogEntry } from '../types';
@@ -125,6 +127,7 @@ const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({
            id: Date.now().toString(),
            timestamp: new Date().toISOString(),
            type: 'pstn',
+           source: 'bridge',
            status: 'success',
            assistantName: 'Ponte SDR',
            to: lead.phone,

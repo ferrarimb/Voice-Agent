@@ -1,4 +1,5 @@
 
+
 import { TwilioConfig, AssistantConfig } from '../types';
 
 export const makeTwilioCall = async (
@@ -34,6 +35,9 @@ export const makeTwilioCall = async (
      if (assistantConfig.elevenLabsApiKey) params.append('xi_api_key', assistantConfig.elevenLabsApiKey);
      if (assistantConfig.firstMessage) params.append('first_message', assistantConfig.firstMessage);
      if (assistantConfig.systemInstruction) params.append('system_instruction', assistantConfig.systemInstruction);
+
+     // Source of the call
+     params.append('source', 'direct_call');
 
      hookUrl = `${hookUrl}${separator}${params.toString()}`;
      formData.append('Url', hookUrl);

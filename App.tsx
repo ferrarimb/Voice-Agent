@@ -128,6 +128,7 @@ const App: React.FC = () => {
         id: Date.now().toString(),
         timestamp: new Date().toISOString(),
         type: 'web',
+        source: 'live_demo',
         status: 'success',
         assistantName: config.name,
         transcript: logs

@@ -1,4 +1,5 @@
 
+
 /**
  * Vapi Clone Backend - Twilio <-> OpenAI Realtime API (GPT-4o Audio)
  * 
@@ -7,6 +8,7 @@
  * 1. Reverted to modalities: ['text', 'audio'] to ensure OpenAI VAD works.
  * 2. Intercepts and blocks OpenAI audio if ElevenLabs is active.
  * 3. Uses audio transcript to drive ElevenLabs TTS.
+ * 4. Adds robust fallback for N8N Webhook URL and Source identification.
  */
 
 require('dotenv').config();
@@ -22,6 +24,9 @@ const fastify = Fastify({
 });
 fastify.register(fastifyFormBody);
 fastify.register(fastifyWebsocket);
+
+// --- CONSTANTS ---
+const DEFAULT_N8N_WEBHOOK = process.env.N8N_WEBHOOK_URL || 'https://webhook-editor.abianca.com.br/webhook/retorno-new-vapi-ae75-6dfccb8f37d4';
 
 // --- Helpers ---
 const log = (msg, type = 'INFO') => {
@@ -274,7 +279,8 @@ fastify.all('/', async (request, reply) => {
     log(`[ROOT] 📞 Handling Outbound Call Request`, "DEBUG");
     
     const host = request.headers.host;
-    const n8nUrl = request.query.n8n_url || '';
+    // Fallback to default if not provided
+    const n8nUrl = request.query.n8n_url || DEFAULT_N8N_WEBHOOK;
     
     // Extract Voice Params
     const voice = request.query.voice || DEFAULT_VOICE;
@@ -283,10 +289,13 @@ fastify.all('/', async (request, reply) => {
     const firstMessage = request.query.first_message || '';
     const systemInstruction = request.query.system_instruction || '';
     
+    // Identify Source
+    const source = request.query.source || 'direct_call';
+
     // Construct WebSocket URL
     const wssUrl = `wss://${host}/media-stream`;
     log(`[ROOT] Connecting Stream to: ${wssUrl}`, "DEBUG");
-    log(`[ROOT] Provider: ${provider}, Voice: ${voice}`, "DEBUG");
+    log(`[ROOT] Provider: ${provider}, Voice: ${voice}, Source: ${source}, Webhook: ${n8nUrl ? 'Set' : 'None'}`, "DEBUG");
 
     const twiml = `
     <Response>
@@ -299,6 +308,7 @@ fastify.all('/', async (request, reply) => {
                 <Parameter name="xi_api_key" value="${escapeXml(xiApiKey)}" />
                 <Parameter name="first_message" value="${escapeXml(firstMessage)}" />
                 <Parameter name="system_instruction" value="${escapeXml(systemInstruction)}" />
+                <Parameter name="source" value="${escapeXml(source)}" />
             </Stream>
         </Connect>
     </Response>
@@ -320,8 +330,11 @@ fastify.post('/trigger-call', async (request, reply) => {
             return reply.status(400).send({ success: false, error: 'Missing Twilio Config' });
         }
 
+        // Apply fallback if n8n_url is missing or empty
+        const finalN8nUrl = n8n_url || DEFAULT_N8N_WEBHOOK;
+
         const auth = Buffer.from(`${twilio_config.accountSid}:${twilio_config.authToken}`).toString('base64');
-        const callbackUrl = `${twilio_config.baseUrl}/connect-lead?lead_name=${encodeURIComponent(lead_name)}&lead_phone=${encodeURIComponent(sanitizePhone(lead_phone))}&horario=${encodeURIComponent(horario)}&n8n_url=${encodeURIComponent(n8n_url || '')}`;
+        const callbackUrl = `${twilio_config.baseUrl}/connect-lead?lead_name=${encodeURIComponent(lead_name)}&lead_phone=${encodeURIComponent(sanitizePhone(lead_phone))}&horario=${encodeURIComponent(horario)}&n8n_url=${encodeURIComponent(finalN8nUrl)}`;
 
         const formData = new URLSearchParams();
         formData.append('To', sanitizePhone(sdr_phone));
@@ -392,7 +405,10 @@ fastify.post('/webhook/speed-dial', async (request, reply) => {
         const baseUrl = `${protocol}://${host}`;
         const horario = data_agendamento || "Agora";
         
-        const callbackUrl = `${baseUrl}/connect-lead?lead_name=${encodeURIComponent(nome_lead)}&lead_phone=${encodeURIComponent(cleanLeadPhone)}&horario=${encodeURIComponent(horario)}&n8n_url=${encodeURIComponent(n8n_url || '')}`;
+        // Apply fallback if n8n_url is missing or empty
+        const finalN8nUrl = n8n_url || DEFAULT_N8N_WEBHOOK;
+
+        const callbackUrl = `${baseUrl}/connect-lead?lead_name=${encodeURIComponent(nome_lead)}&lead_phone=${encodeURIComponent(cleanLeadPhone)}&horario=${encodeURIComponent(horario)}&n8n_url=${encodeURIComponent(finalN8nUrl)}`;
 
         const auth = Buffer.from(`${accountSid}:${authToken}`).toString('base64');
         const formData = new URLSearchParams();
@@ -445,7 +461,8 @@ fastify.all('/connect-lead', async (request, reply) => {
     const lead_name = escapeXml(raw_lead_name || 'Cliente');
     const lead_phone = sanitizePhone(raw_lead_phone);
     const horario = escapeXml(raw_horario || 'agora');
-    const n8n_url = raw_n8n_url || '';
+    // Fallback to default
+    const n8n_url = raw_n8n_url || DEFAULT_N8N_WEBHOOK;
 
     const { AnsweredBy } = bodyParams;
     const wssUrl = `wss://${host}/media-stream`;
@@ -466,6 +483,7 @@ fastify.all('/connect-lead', async (request, reply) => {
                 <Parameter name="voice" value="${escapeXml(voice)}" />
                 <Parameter name="provider" value="${escapeXml(provider)}" />
                 <Parameter name="xi_api_key" value="${escapeXml(xiKey)}" />
+                <Parameter name="source" value="bridge" />
             </Stream>
         </Start>
         <Say voice="Polly.Camila-Neural" language="pt-BR">
@@ -485,7 +503,9 @@ fastify.all('/incoming', async (request, reply) => {
     const host = request.headers.host;
     const queryParams = request.query || {};
     
-    const n8nUrl = getSingleParam(queryParams.n8n_url) || '';
+    // Fallback to default
+    const n8nUrl = getSingleParam(queryParams.n8n_url) || DEFAULT_N8N_WEBHOOK;
+
     const voice = getSingleParam(queryParams.voice) || DEFAULT_VOICE;
     const provider = getSingleParam(queryParams.provider) || 'openai';
     const xiKey = getSingleParam(queryParams.xi_api_key) || '';
@@ -505,6 +525,7 @@ fastify.all('/incoming', async (request, reply) => {
                 <Parameter name="xi_api_key" value="${escapeXml(xiKey)}" />
                 <Parameter name="first_message" value="${escapeXml(firstMessage)}" />
                 <Parameter name="system_instruction" value="${escapeXml(systemInstruction)}" />
+                <Parameter name="source" value="incoming_call" />
             </Stream>
         </Connect>
         <Pause length="40" /> 
@@ -526,7 +547,8 @@ fastify.register(async (fastifyInstance) => {
         let isSessionUpdated = false;
         let hasSentGreeting = false;
         let callMode = 'agent'; 
-        
+        let callSource = 'unknown';
+
         // Voice Config
         let activeVoice = DEFAULT_VOICE;
         let activeProvider = 'openai';
@@ -682,14 +704,20 @@ fastify.register(async (fastifyInstance) => {
                     const params = data.start.customParameters || {};
                     
                     if (params.n8n_url) n8nUrl = params.n8n_url;
+                    // Double check if params.n8n_url is empty string, if so fallback to default
+                    if (!n8nUrl) n8nUrl = DEFAULT_N8N_WEBHOOK;
+                    
                     if (params.mode) callMode = params.mode;
                     if (params.voice) activeVoice = params.voice;
                     if (params.provider) activeProvider = params.provider;
                     if (params.xi_api_key) elevenLabsApiKey = params.xi_api_key;
                     if (params.first_message) initialGreeting = params.first_message;
                     if (params.system_instruction) customSystemInstruction = params.system_instruction;
+                    
+                    // Set Source
+                    if (params.source) callSource = params.source;
 
-                    log(`▶️ Stream Started. Mode: ${callMode}. Voice: ${activeVoice} (${activeProvider})`, "TWILIO");
+                    log(`▶️ Stream Started. Mode: ${callMode}. Voice: ${activeVoice} (${activeProvider}). Source: ${callSource}`, "TWILIO");
                     
                     // IF ElevenLabs: Trigger Greeting IMMEDIATELY (Don't wait for OpenAI loop)
                     if (callMode === 'agent' && activeProvider === 'elevenlabs' && elevenLabsApiKey) {
@@ -755,6 +783,7 @@ fastify.register(async (fastifyInstance) => {
                                 mainTranscript = transcripts.map(t => `${t.role.toUpperCase()}: ${t.message}`).join('\n');
                             }
 
+                            log(`🚀 Sending Webhook to: ${n8nUrl}`, "WEBHOOK");
                             fetch(n8nUrl, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
@@ -765,10 +794,16 @@ fastify.register(async (fastifyInstance) => {
                                     recordingUrl: recordingUrl || "", 
                                     timestamp: new Date().toISOString(),
                                     status: 'success',
-                                    mode: callMode
+                                    mode: callMode,
+                                    source: callSource || 'unknown'
                                 })
+                            }).then(res => {
+                                if (res.ok) log(`✅ Webhook Delivered`, "WEBHOOK");
+                                else log(`❌ Webhook HTTP Error: ${res.status}`, "WEBHOOK");
                             }).catch(err => log(`Webhook Failed: ${err.message}`, "WEBHOOK"));
                         }
+                    } else {
+                        log(`⚠️ No N8N URL configured. Skipping webhook.`, "WEBHOOK");
                     }
                 }
             } catch (e) {
