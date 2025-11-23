@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { Phone, Delete, Loader2 } from 'lucide-react';
 import { TwilioConfig, AssistantConfig, CallLogEntry } from '../types';
@@ -29,7 +30,10 @@ const PhoneInterface: React.FC<PhoneInterfaceProps> = ({ assistantConfig, twilio
     if (!phoneNumber) return;
     setIsCalling(true);
     setStatusMsg(null);
-    const result = await makeTwilioCall(twilioConfig, phoneNumber, assistantConfig.firstMessage, n8nWebhookUrl);
+    
+    // Pass assistantConfig (including voice settings) to the service
+    const result = await makeTwilioCall(twilioConfig, phoneNumber, assistantConfig, n8nWebhookUrl);
+    
     const logEntry: CallLogEntry = {
         id: Date.now().toString(),
         timestamp: new Date().toISOString(),

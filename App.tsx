@@ -73,10 +73,12 @@ const App: React.FC = () => {
   const [config, setConfig] = useState<AssistantConfig>({
     name: 'Agente de Agendamento',
     systemInstruction: DEFAULT_SYSTEM_INSTRUCTION,
-    voice: VoiceName.Kore,
+    voiceProvider: 'elevenlabs',
+    voice: '33B4UnXyTNbgLmdEDh5P',
+    elevenLabsApiKey: 'sk_39578024a45d109ca7904d876342b2db4cece03ff833077c',
     firstMessage: 'Olá! Aqui é a Bianca da Imobiliária. Vi que você se interessou pelo imóvel no centro. Como posso ajudar?',
     transcriberModel: 'nova-2',
-    model: 'gemini-2.5-flash-native-audio-preview-09-2025'
+    model: 'gpt-4o-realtime-preview'
   });
 
   const handleSaveSettings = (newSettings: AppSettings) => {

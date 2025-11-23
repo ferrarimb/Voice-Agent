@@ -1,6 +1,6 @@
-import React from 'react';
-import { AssistantConfig } from '../types';
-import { Save, Play, Sparkles, Mic2 } from 'lucide-react';
+import React, { useState } from 'react';
+import { AssistantConfig, VoiceProvider } from '../types';
+import { Save, Play, Sparkles, Mic2, Eye, EyeOff } from 'lucide-react';
 
 interface AssistantConfigProps {
   config: AssistantConfig;
@@ -20,9 +20,16 @@ const OPENAI_VOICES = [
 ];
 
 const AssistantConfigPanel: React.FC<AssistantConfigProps> = ({ config, setConfig, onStartDemo }) => {
+  const [showKey, setShowKey] = useState(false);
   
-  const handleChange = (field: keyof AssistantConfig, value: string) => {
+  const handleChange = (field: keyof AssistantConfig, value: any) => {
     setConfig({ ...config, [field]: value });
+  };
+
+  const handleProviderChange = (provider: VoiceProvider) => {
+    // Set smart defaults when switching
+    const defaultVoice = provider === 'openai' ? 'alloy' : '33B4UnXyTNbgLmdEDh5P';
+    setConfig({ ...config, voiceProvider: provider, voice: defaultVoice });
   };
 
   return (
@@ -103,22 +110,76 @@ const AssistantConfigPanel: React.FC<AssistantConfigProps> = ({ config, setConfi
            </div>
 
            <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
+              
+              {/* Provider Selection */}
               <div className="space-y-4">
-                 <label className="text-xs uppercase tracking-widest font-bold text-white/30 ml-1">Voice ID</label>
+                 <label className="text-xs uppercase tracking-widest font-bold text-white/30 ml-1">Voice Provider</label>
                  <div className="relative group">
                     <select 
-                        className="w-full glass-input rounded-2xl px-5 py-4 text-sm uppercase appearance-none cursor-pointer font-medium tracking-wide"
-                        value={config.voice}
-                        onChange={(e) => handleChange('voice', e.target.value.toLowerCase() as any)}
+                        className="w-full glass-input rounded-2xl px-5 py-4 text-sm appearance-none cursor-pointer font-medium tracking-wide"
+                        value={config.voiceProvider}
+                        onChange={(e) => handleProviderChange(e.target.value as VoiceProvider)}
                     >
-                        {OPENAI_VOICES.map(v => (
-                            <option key={v} value={v} className="bg-slate-900 text-white">{v}</option>
-                        ))}
+                        <option value="openai" className="bg-slate-900 text-white">OpenAI</option>
+                        <option value="elevenlabs" className="bg-slate-900 text-white">ElevenLabs</option>
                     </select>
                     <div className="absolute right-5 top-4.5 text-white/30 pointer-events-none group-hover:text-white/60 transition">▼</div>
                  </div>
               </div>
-              <div className="space-y-4">
+
+              {/* Conditional Inputs */}
+              {config.voiceProvider === 'openai' ? (
+                <div className="space-y-4">
+                    <label className="text-xs uppercase tracking-widest font-bold text-white/30 ml-1">Voice ID</label>
+                    <div className="relative group">
+                        <select 
+                            className="w-full glass-input rounded-2xl px-5 py-4 text-sm uppercase appearance-none cursor-pointer font-medium tracking-wide"
+                            value={config.voice}
+                            onChange={(e) => handleChange('voice', e.target.value)}
+                        >
+                            {OPENAI_VOICES.map(v => (
+                                <option key={v} value={v} className="bg-slate-900 text-white">{v}</option>
+                            ))}
+                        </select>
+                        <div className="absolute right-5 top-4.5 text-white/30 pointer-events-none group-hover:text-white/60 transition">▼</div>
+                    </div>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                    <label className="text-xs uppercase tracking-widest font-bold text-white/30 ml-1">ElevenLabs Voice ID</label>
+                    <input 
+                        type="text"
+                        className="w-full glass-input rounded-2xl px-5 py-4 text-sm font-medium tracking-wide placeholder:text-white/20"
+                        value={config.voice}
+                        placeholder="Ex: 21m00Tcm4TlvDq8ikWAM"
+                        onChange={(e) => handleChange('voice', e.target.value)}
+                    />
+                </div>
+              )}
+
+              {/* API Key for ElevenLabs */}
+              {config.voiceProvider === 'elevenlabs' && (
+                 <div className="col-span-1 md:col-span-2 space-y-4">
+                    <label className="text-xs uppercase tracking-widest font-bold text-white/30 ml-1">ElevenLabs API Key</label>
+                    <div className="relative">
+                        <input 
+                            type={showKey ? "text" : "password"}
+                            className="w-full glass-input rounded-2xl px-5 py-4 text-sm font-medium font-mono placeholder:text-white/20 pr-12"
+                            value={config.elevenLabsApiKey || ''}
+                            placeholder="sk_..."
+                            onChange={(e) => handleChange('elevenLabsApiKey', e.target.value)}
+                        />
+                         <button 
+                            onClick={() => setShowKey(!showKey)}
+                            className="absolute right-4 top-1/2 -translate-y-1/2 text-white/30 hover:text-white transition"
+                        >
+                            {showKey ? <EyeOff size={18} /> : <Eye size={18} />}
+                        </button>
+                    </div>
+                </div>
+              )}
+
+              <div className="col-span-1 md:col-span-2 space-y-4">
                  <label className="text-xs uppercase tracking-widest font-bold text-white/30 ml-1">Transcriber</label>
                  <div className="glass-input rounded-2xl px-5 py-4 text-sm text-white/50 flex justify-between items-center opacity-70 cursor-not-allowed">
                     <span>Whisper-1 (Integrated)</span>

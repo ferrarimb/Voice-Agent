@@ -1,4 +1,5 @@
 
+
 export enum VoiceName {
   Puck = 'Puck',
   Charon = 'Charon',
@@ -7,10 +8,14 @@ export enum VoiceName {
   Zephyr = 'Zephyr',
 }
 
+export type VoiceProvider = 'openai' | 'elevenlabs';
+
 export interface AssistantConfig {
   name: string;
   systemInstruction: string;
-  voice: VoiceName;
+  voiceProvider: VoiceProvider;
+  voice: string;
+  elevenLabsApiKey?: string;
   firstMessage: string;
   transcriberModel: string;
   model: string;

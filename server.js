@@ -2,12 +2,11 @@
 /**
  * Vapi Clone Backend - Twilio <-> OpenAI Realtime API (GPT-4o Audio)
  * 
- * OPTIMIZED: v16 (Bug Fixes & Hardening)
+ * OPTIMIZED: v19 (ElevenLabs Voice Transplant)
  * Fixes: 
- * 1. Phone Number Sanitization (prevents <Dial> failures).
- * 2. Query Param Deduplication (prevents "Name, Name" TTS).
- * 3. XML Escaping (prevents TwiML crash on special chars).
- * 4. N8N URL Validation (prevents fetch errors).
+ * 1. Reverted to modalities: ['text', 'audio'] to ensure OpenAI VAD works.
+ * 2. Intercepts and blocks OpenAI audio if ElevenLabs is active.
+ * 3. Uses audio transcript to drive ElevenLabs TTS.
  */
 
 require('dotenv').config();
@@ -18,7 +17,9 @@ const WebSocket = require('ws');
 const { createClient } = require('@supabase/supabase-js');
 const crypto = require('crypto');
 
-const fastify = Fastify();
+const fastify = Fastify({
+    logger: false // We use our own logger
+});
 fastify.register(fastifyFormBody);
 fastify.register(fastifyWebsocket);
 
@@ -27,8 +28,16 @@ const log = (msg, type = 'INFO') => {
     // FILTER: Don't log high-frequency media events to console to prevent lag
     if (type === 'BUFFER') return; 
     const time = new Date().toISOString().split('T')[1].slice(0, -1);
-    console.log(`[${time}] [${type}] ${msg}`);
+    const color = type === 'ERROR' ? '\x1b[31m' : type === 'SYSTEM' ? '\x1b[32m' : type === 'DEBUG' ? '\x1b[33m' : '\x1b[0m';
+    console.log(`${color}[${time}] [${type}] ${msg}\x1b[0m`);
 };
+
+// Global Error Handler
+fastify.setErrorHandler(function (error, request, reply) {
+    log(`FATAL ERROR: ${error.message}`, 'ERROR');
+    log(error.stack, 'ERROR');
+    reply.status(500).send({ error: "Internal Server Error", message: error.message });
+});
 
 // Helper to sanitize phone numbers (remove spaces, parens, dashes)
 const sanitizePhone = (phone) => {
@@ -156,11 +165,67 @@ async function transcribeWithWhisper(audioBuffer) {
     }
 }
 
+// --- ELEVENLABS HELPER ---
+async function streamElevenLabsAudio(text, voiceId, apiKey, twilioWs, streamSid) {
+    if (!text || !text.trim()) return;
+    log(`🗣️ ElevenLabs TTS Request: "${text.substring(0, 30)}..."`, "ELEVENLABS");
+    
+    try {
+        // optimize_streaming_latency=4 (Maximum speed)
+        // output_format=ulaw_8000 (Twilio native)
+        const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream?output_format=ulaw_8000&optimize_streaming_latency=4`, {
+            method: 'POST',
+            headers: {
+                'xi-api-key': apiKey,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                text: text,
+                model_id: "eleven_turbo_v2_5", // Turbo model for speed
+                voice_settings: {
+                    stability: 0.5,
+                    similarity_boost: 0.7
+                }
+            })
+        });
+
+        if (!response.ok) {
+            const err = await response.text();
+            log(`❌ ElevenLabs API Error: ${err}`, "ERROR");
+            return;
+        }
+
+        // Stream the response body
+        const reader = response.body.getReader();
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            // value is a Uint8Array of u-law bytes
+            // Convert to base64 and send to Twilio
+            const payload = Buffer.from(value).toString('base64');
+            
+            if (twilioWs.readyState === WebSocket.OPEN) {
+                twilioWs.send(JSON.stringify({
+                    event: 'media',
+                    streamSid: streamSid,
+                    media: { payload: payload }
+                }));
+            }
+        }
+    } catch (e) {
+        log(`❌ ElevenLabs Stream Error: ${e.message}`, "ERROR");
+    }
+}
+
+
 // --- CORS & LOGGING HOOK ---
 fastify.addHook('onRequest', (request, reply, done) => {
     // Only log distinct non-health-check requests
     if (!request.url.includes('health') && !request.url.includes('favicon')) {
         log(`INCOMING: ${request.method} ${request.url}`, "NETWORK");
+        // Log body if it exists for deeper debug
+        if (request.body) log(`BODY: ${JSON.stringify(request.body).substring(0, 100)}...`, "DEBUG");
     }
     reply.header("Access-Control-Allow-Origin", "*");
     reply.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
@@ -193,7 +258,7 @@ REGRAS:
 4. Você está ouvindo uma chamada telefônica entre duas pessoas.
 `.trim();
 
-const VOICE = 'alloy';
+const DEFAULT_VOICE = 'alloy';
 
 // --- Routes ---
 
@@ -202,6 +267,44 @@ fastify.options('/trigger-call', async (request, reply) => {
 });
 fastify.options('/webhook/speed-dial', async (request, reply) => {
     return reply.send();
+});
+
+// 0. ROOT HANDLER
+fastify.all('/', async (request, reply) => {
+    log(`[ROOT] 📞 Handling Outbound Call Request`, "DEBUG");
+    
+    const host = request.headers.host;
+    const n8nUrl = request.query.n8n_url || '';
+    
+    // Extract Voice Params
+    const voice = request.query.voice || DEFAULT_VOICE;
+    const provider = request.query.provider || 'openai';
+    const xiApiKey = request.query.xi_api_key || '';
+    const firstMessage = request.query.first_message || '';
+    const systemInstruction = request.query.system_instruction || '';
+    
+    // Construct WebSocket URL
+    const wssUrl = `wss://${host}/media-stream`;
+    log(`[ROOT] Connecting Stream to: ${wssUrl}`, "DEBUG");
+    log(`[ROOT] Provider: ${provider}, Voice: ${voice}`, "DEBUG");
+
+    const twiml = `
+    <Response>
+        <Connect>
+            <Stream url="${wssUrl}">
+                <Parameter name="n8n_url" value="${escapeXml(n8nUrl)}" />
+                <Parameter name="mode" value="agent" />
+                <Parameter name="voice" value="${escapeXml(voice)}" />
+                <Parameter name="provider" value="${escapeXml(provider)}" />
+                <Parameter name="xi_api_key" value="${escapeXml(xiApiKey)}" />
+                <Parameter name="first_message" value="${escapeXml(firstMessage)}" />
+                <Parameter name="system_instruction" value="${escapeXml(systemInstruction)}" />
+            </Stream>
+        </Connect>
+    </Response>
+    `;
+    
+    reply.type('text/xml').send(twiml);
 });
 
 // 1. Trigger Call (Speed-to-Lead) - FRONTEND VERSION
@@ -243,6 +346,7 @@ fastify.post('/trigger-call', async (request, reply) => {
         const result = await response.json();
         return reply.send({ success: true, sid: result.sid });
     } catch (e) {
+        log(`[TRIGGER] Error: ${e.message}`, "ERROR");
         return reply.status(500).send({ success: false, error: e.message });
     }
 });
@@ -254,20 +358,17 @@ fastify.post('/webhook/speed-dial', async (request, reply) => {
         const body = request.body;
         if (!body) return reply.status(400).send({ success: false, error: "Body missing" });
 
-        // 1. Map Params (Portuguese to Internal Logic)
         const { 
             nome_lead, 
             data_agendamento, 
             telefone_lead, 
             telefone_sdr,
-            n8n_url, // Allow n8n_url to be passed directly in JSON
-            // Credentials mapping directly from body as requested
+            n8n_url, 
             TWILIO_ACCOUNT_SID,
             TWILIO_AUTH_TOKEN,
             TWILIO_FROM_NUMBER
         } = body;
 
-        // 2. Validate essential operational data
         if (!nome_lead || !telefone_lead || !telefone_sdr) {
             return reply.status(400).send({ success: false, error: "Faltando parametros obrigatorios: nome_lead, telefone_lead, telefone_sdr" });
         }
@@ -275,7 +376,6 @@ fastify.post('/webhook/speed-dial', async (request, reply) => {
         const cleanSdrPhone = sanitizePhone(telefone_sdr);
         const cleanLeadPhone = sanitizePhone(telefone_lead);
 
-        // 3. Resolve Credentials (Priority: JSON Body > Environment Variables)
         const accountSid = TWILIO_ACCOUNT_SID || process.env.TWILIO_ACCOUNT_SID;
         const authToken = TWILIO_AUTH_TOKEN || process.env.TWILIO_AUTH_TOKEN;
         const fromNumber = TWILIO_FROM_NUMBER || process.env.TWILIO_FROM_NUMBER;
@@ -283,17 +383,13 @@ fastify.post('/webhook/speed-dial', async (request, reply) => {
         if (!accountSid || !authToken || !fromNumber) {
             return reply.status(500).send({ 
                 success: false, 
-                error: "Credenciais Twilio ausentes. Envie no JSON (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER) ou configure no .env do servidor." 
+                error: "Credenciais Twilio ausentes." 
             });
         }
 
-        // 4. Construct Callback URL
-        // We use the host header to determine where to callback (ngrok)
         const protocol = request.protocol || 'https';
         const host = request.headers.host;
         const baseUrl = `${protocol}://${host}`;
-        
-        // Map 'data_agendamento' to 'horario' for the TTS engine
         const horario = data_agendamento || "Agora";
         
         const callbackUrl = `${baseUrl}/connect-lead?lead_name=${encodeURIComponent(nome_lead)}&lead_phone=${encodeURIComponent(cleanLeadPhone)}&horario=${encodeURIComponent(horario)}&n8n_url=${encodeURIComponent(n8n_url || '')}`;
@@ -318,7 +414,6 @@ fastify.post('/webhook/speed-dial', async (request, reply) => {
 
         if (!response.ok) {
             const err = await response.json();
-            log(`[WEBHOOK] Erro Twilio: ${JSON.stringify(err)}`, "ERROR");
             return reply.send({ success: false, error: err.message });
         }
         
@@ -333,15 +428,19 @@ fastify.post('/webhook/speed-dial', async (request, reply) => {
 
 // 2. Connect Lead (TwiML Webhook)
 fastify.all('/connect-lead', async (request, reply) => {
+    log(`[CONNECT-LEAD] Initializing Bridge Call...`, "DEBUG");
     const queryParams = request.query || {};
     const bodyParams = request.body || {};
     const host = request.headers.host;
     
-    // IMPORTANT: Fix for duplicated params (e.g. lead_name=Keyth&lead_name=Keyth) which causes "Keyth, Keyth" TTS
     const raw_lead_name = getSingleParam(queryParams.lead_name);
     const raw_lead_phone = getSingleParam(queryParams.lead_phone);
     const raw_horario = getSingleParam(queryParams.horario);
     const raw_n8n_url = getSingleParam(queryParams.n8n_url);
+    
+    const voice = getSingleParam(queryParams.voice) || DEFAULT_VOICE;
+    const provider = getSingleParam(queryParams.provider) || 'openai';
+    const xiKey = getSingleParam(queryParams.xi_api_key) || '';
     
     const lead_name = escapeXml(raw_lead_name || 'Cliente');
     const lead_phone = sanitizePhone(raw_lead_phone);
@@ -356,8 +455,6 @@ fastify.all('/connect-lead', async (request, reply) => {
         return reply.type('text/xml').send(twiml);
     }
     
-    // CallerId must be the Twilio Number (bodyParams.From in the context of the outbound call we just made)
-    // Or it can be the verified number.
     const fromNumber = bodyParams.From || '';
 
     const twiml = `
@@ -366,6 +463,9 @@ fastify.all('/connect-lead', async (request, reply) => {
             <Stream url="${wssUrl}" track="both_tracks">
                 <Parameter name="n8n_url" value="${escapeXml(n8n_url)}" />
                 <Parameter name="mode" value="bridge" />
+                <Parameter name="voice" value="${escapeXml(voice)}" />
+                <Parameter name="provider" value="${escapeXml(provider)}" />
+                <Parameter name="xi_api_key" value="${escapeXml(xiKey)}" />
             </Stream>
         </Start>
         <Say voice="Polly.Camila-Neural" language="pt-BR">
@@ -379,18 +479,32 @@ fastify.all('/connect-lead', async (request, reply) => {
     reply.type('text/xml').send(twiml);
 });
 
-// 3. Incoming Call (Standard AI Agent)
-fastify.post('/incoming', async (request, reply) => {
+// 3. Incoming Call
+fastify.all('/incoming', async (request, reply) => {
+    log(`[INCOMING] Receiving Standard Call`, "DEBUG");
     const host = request.headers.host;
-    const n8nUrl = request.query.n8n_url || '';
+    const queryParams = request.query || {};
+    
+    const n8nUrl = getSingleParam(queryParams.n8n_url) || '';
+    const voice = getSingleParam(queryParams.voice) || DEFAULT_VOICE;
+    const provider = getSingleParam(queryParams.provider) || 'openai';
+    const xiKey = getSingleParam(queryParams.xi_api_key) || '';
+    const firstMessage = getSingleParam(queryParams.first_message) || '';
+    const systemInstruction = getSingleParam(queryParams.system_instruction) || '';
+    
     const wssUrl = `wss://${host}/media-stream`;
     
     const twiml = `
     <Response>
         <Connect>
             <Stream url="${wssUrl}">
-                <Parameter name="n8n_url" value="${n8nUrl}" />
+                <Parameter name="n8n_url" value="${escapeXml(n8nUrl)}" />
                 <Parameter name="mode" value="agent" />
+                <Parameter name="voice" value="${escapeXml(voice)}" />
+                <Parameter name="provider" value="${escapeXml(provider)}" />
+                <Parameter name="xi_api_key" value="${escapeXml(xiKey)}" />
+                <Parameter name="first_message" value="${escapeXml(firstMessage)}" />
+                <Parameter name="system_instruction" value="${escapeXml(systemInstruction)}" />
             </Stream>
         </Connect>
         <Pause length="40" /> 
@@ -413,6 +527,13 @@ fastify.register(async (fastifyInstance) => {
         let hasSentGreeting = false;
         let callMode = 'agent'; 
         
+        // Voice Config
+        let activeVoice = DEFAULT_VOICE;
+        let activeProvider = 'openai';
+        let elevenLabsApiKey = '';
+        let customSystemInstruction = '';
+        let initialGreeting = "Hello! I am ready to help you.";
+        
         const transcripts = [];
         let savedAudioChunks = []; // Storing raw u-law buffers
         let openAiAudioQueue = [];
@@ -431,34 +552,51 @@ fastify.register(async (fastifyInstance) => {
                 });
 
                 openAiWs.on('open', () => {
-                    log('🤖 OpenAI Connected', "OPENAI");
+                    log(`🤖 OpenAI Connected [Provider: ${activeProvider}]`, "OPENAI");
                     isOpenAiConnected = true;
                     
                     const isBridge = callMode === 'bridge';
-                    const instruction = isBridge ? SYSTEM_MESSAGE_SCRIBE : SYSTEM_MESSAGE_AGENT;
+                    const isElevenLabs = activeProvider === 'elevenlabs';
                     
+                    let instruction = isBridge ? SYSTEM_MESSAGE_SCRIBE : SYSTEM_MESSAGE_AGENT;
+                    if (!isBridge && customSystemInstruction) {
+                        instruction = customSystemInstruction;
+                    }
+                    
+                    // CRITICAL FIX: We MUST use ['text', 'audio'] even for ElevenLabs.
+                    // If we use ['text'], OpenAI Realtime acts passively and doesn't handle VAD/Turn-taking well.
+                    // Strategy: We let OpenAI generate audio, but we BLOCK it from sending to Twilio if ElevenLabs is on.
+                    // Then we take the transcript of that audio and send it to ElevenLabs.
+                    const modalities = ['text', 'audio'];
+                    
+                    // If we are using OpenAI voice, ensure it's a valid one.
+                    let openAiVoice = activeVoice;
+                    const validOpenAIVoices = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'sage', 'shimmer', 'verse'];
+                    if (!validOpenAIVoices.includes(openAiVoice)) {
+                         openAiVoice = 'alloy'; // Default to Alloy if using custom ElevenLabs ID
+                    }
+
                     const sessionConfig = {
                         type: 'session.update',
                         session: {
-                            modalities: isBridge ? ['text'] : ['text', 'audio'], 
+                            modalities: modalities, 
                             instructions: instruction,
-                            voice: VOICE,
-                            input_audio_format: 'g711_ulaw', // Native Twilio Format
-                            output_audio_format: 'g711_ulaw', // Native Twilio Format
+                            voice: openAiVoice, 
+                            input_audio_format: 'g711_ulaw',
+                            output_audio_format: 'g711_ulaw',
                             input_audio_transcription: { model: 'whisper-1' },
                             turn_detection: { type: 'server_vad' },
-                            temperature: 0.6 // Slightly higher for more natural speech in agent mode
+                            temperature: 0.7
                         }
                     };
                     openAiWs.send(JSON.stringify(sessionConfig));
 
                     if (openAiAudioQueue.length > 0) {
-                        log(`⚡ Flushing ${openAiAudioQueue.length} buffered chunks to OpenAI`, "BUFFER");
                         while (openAiAudioQueue.length > 0) {
                             const chunk = openAiAudioQueue.shift();
                             openAiWs.send(JSON.stringify({
                                 type: 'input_audio_buffer.append',
-                                audio: chunk // Send base64 string directly
+                                audio: chunk 
                             }));
                         }
                     }
@@ -470,39 +608,48 @@ fastify.register(async (fastifyInstance) => {
 
                         if (event.type === 'session.updated') {
                             isSessionUpdated = true;
-                            if (callMode === 'agent') checkAndSendGreeting();
-                        } else if (event.type === 'response.audio.delta' && event.delta) {
-                            if (streamSid && callMode === 'agent') {
+                            // Greeting logic is now handled in 'start' for ElevenLabs or 'session.updated' for OpenAI
+                            if (callMode === 'agent' && activeProvider !== 'elevenlabs') {
+                                checkAndSendGreetingOpenAI();
+                            }
+                        } 
+                        // --- AUDIO OUTPUT (OpenAI Native) ---
+                        else if (event.type === 'response.audio.delta' && event.delta) {
+                            // BLOCKING LOGIC: Only send audio if NOT using ElevenLabs
+                            if (streamSid && callMode === 'agent' && activeProvider !== 'elevenlabs') {
                                 twilioWs.send(JSON.stringify({
                                     event: 'media',
                                     streamSid: streamSid,
                                     media: { payload: event.delta }
                                 }));
-                                // We don't save AI audio in the recording to keep it clean for transcription if possible,
-                                // but for a full log, you might want it. For now, let's focus on user input/mixed input from Twilio.
                             }
-                        } else if (event.type === 'input_audio_buffer.speech_started') {
+                        } 
+                        // --- INTERRUPTION HANDLING ---
+                        else if (event.type === 'input_audio_buffer.speech_started') {
                             if (streamSid && callMode === 'agent') {
                                 twilioWs.send(JSON.stringify({ event: 'clear', streamSid: streamSid }));
                                 openAiWs.send(JSON.stringify({ type: 'response.cancel' }));
                             }
-                        } else if (event.type === 'conversation.item.input_audio_transcription.completed') {
+                        } 
+                        // --- TRANSCRIPTIONS (User) ---
+                        else if (event.type === 'conversation.item.input_audio_transcription.completed') {
                             const text = event.transcript;
                             if (text && text.trim().length > 0) {
-                                log(`🗣️ Realtime Transcript: ${text}`, "TRANSCRIPT");
+                                log(`🗣️ User: ${text}`, "TRANSCRIPT");
                                 transcripts.push({ role: 'user', message: text, timestamp: new Date() });
                             }
-                        } else if (event.type === 'response.done') {
-                            if (callMode === 'agent') {
-                                const outputItems = event.response?.output || [];
-                                for (const item of outputItems) {
-                                    if (item.content) {
-                                        for (const content of item.content) {
-                                            if (content.type === 'audio' && content.transcript) {
-                                                transcripts.push({ role: 'assistant', message: content.transcript, timestamp: new Date() });
-                                            }
-                                        }
-                                    }
+                        } 
+                        // --- TRANSCRIPTIONS (Agent) & ELEVENLABS TRIGGER ---
+                        // We use audio_transcript.done because it matches the audio generation we suppressed.
+                        else if (event.type === 'response.audio_transcript.done') {
+                            const text = event.transcript;
+                            if (text && callMode === 'agent') {
+                                transcripts.push({ role: 'assistant', message: text, timestamp: new Date() });
+                                
+                                // VOICE TRANSPLANT: OpenAI thought it spoke (we muted it), 
+                                // now we take what it said and send to ElevenLabs.
+                                if (activeProvider === 'elevenlabs' && elevenLabsApiKey) {
+                                    streamElevenLabsAudio(text, activeVoice, elevenLabsApiKey, twilioWs, streamSid);
                                 }
                             }
                         }
@@ -513,29 +660,50 @@ fastify.register(async (fastifyInstance) => {
             } catch (err) {}
         };
 
+        const checkAndSendGreetingOpenAI = () => {
+             if (streamSid && isSessionUpdated && !hasSentGreeting) {
+                openAiWs.send(JSON.stringify({
+                    type: 'response.create',
+                    response: {
+                        modalities: ['text', 'audio'],
+                        instructions: `Say '${initialGreeting}'` 
+                    }
+                }));
+                hasSentGreeting = true;
+             }
+        };
+
         twilioWs.on('message', async (message) => {
             try {
                 const data = JSON.parse(message.toString());
 
                 if (data.event === 'start') {
                     streamSid = data.start.streamSid;
-                    if (data.start.customParameters) {
-                        if (data.start.customParameters.n8n_url) n8nUrl = data.start.customParameters.n8n_url;
-                        if (data.start.customParameters.mode) callMode = data.start.customParameters.mode;
-                    }
-                    log(`▶️ Stream Started. Mode: ${callMode}. Webhook: ${n8nUrl ? 'YES' : 'NO'}`, "TWILIO");
+                    const params = data.start.customParameters || {};
                     
+                    if (params.n8n_url) n8nUrl = params.n8n_url;
+                    if (params.mode) callMode = params.mode;
+                    if (params.voice) activeVoice = params.voice;
+                    if (params.provider) activeProvider = params.provider;
+                    if (params.xi_api_key) elevenLabsApiKey = params.xi_api_key;
+                    if (params.first_message) initialGreeting = params.first_message;
+                    if (params.system_instruction) customSystemInstruction = params.system_instruction;
+
+                    log(`▶️ Stream Started. Mode: ${callMode}. Voice: ${activeVoice} (${activeProvider})`, "TWILIO");
+                    
+                    // IF ElevenLabs: Trigger Greeting IMMEDIATELY (Don't wait for OpenAI loop)
+                    if (callMode === 'agent' && activeProvider === 'elevenlabs' && elevenLabsApiKey) {
+                        streamElevenLabsAudio(initialGreeting, activeVoice, elevenLabsApiKey, twilioWs, streamSid);
+                        hasSentGreeting = true; // Mark as sent so OpenAI doesn't duplicate (though OpenAI side uses separate logic now)
+                    }
+
                     connectToOpenAI();
 
                 } else if (data.event === 'media') {
                     if (data.media.payload) {
-                        // 1. Buffer Raw Payload (u-law) for Wav File
-                        // We store the base64 string directly in memory or convert to Buffer once to save space
-                        // Converting to Buffer immediately is better for memory than keeping V8 strings
                         const chunkBuffer = Buffer.from(data.media.payload, 'base64');
                         savedAudioChunks.push(chunkBuffer);
 
-                        // 2. Send to OpenAI (Fast path)
                         if (isOpenAiConnected && openAiWs.readyState === WebSocket.OPEN) {
                             openAiWs.send(JSON.stringify({
                                 type: 'input_audio_buffer.append',
@@ -554,69 +722,39 @@ fastify.register(async (fastifyInstance) => {
                         let recordingUrl = null;
                         let finalTranscription = null;
 
-                        // --- AUDIO PROCESSING & WHISPER ---
                         if (savedAudioChunks.length > 0) {
                             try {
                                 log(`💾 Processing ${savedAudioChunks.length} chunks...`, "AUDIO");
-                                
-                                // 1. Concatenate all u-law buffers
                                 const uLawBuffer = Buffer.concat(savedAudioChunks);
-                                
-                                // 2. Decode u-law to PCM-16 (8000Hz)
-                                // We do NOT upsample. We keep it 8kHz to prevent artifacts/slow motion.
                                 const pcmBuffer = decodeMuLawBuffer(uLawBuffer);
-                                
-                                // 3. Create WAV Header with 8000Hz
                                 const wavHeader = createWavHeader(pcmBuffer.byteLength, 8000);
-                                
-                                // 4. Combine
                                 const finalWavBuffer = Buffer.concat([wavHeader, Buffer.from(pcmBuffer.buffer)]);
 
-                                // 5. UPLOAD TO SUPABASE
                                 const fileName = `call_${callMode}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.wav`;
                                 const { data: uploadData, error: uploadError } = await supabase
                                     .storage
                                     .from('audios') 
-                                    .upload(fileName, finalWavBuffer, {
-                                        contentType: 'audio/wav',
-                                        upsert: false
-                                    });
+                                    .upload(fileName, finalWavBuffer, { contentType: 'audio/wav', upsert: false });
 
-                                if (uploadError) {
-                                    log(`❌ Supabase Upload Error: ${uploadError.message}`, "ERROR");
-                                } else {
-                                    const { data: publicUrlData } = supabase
-                                        .storage
-                                        .from('audios')
-                                        .getPublicUrl(fileName);
-                                    
+                                if (!uploadError) {
+                                    const { data: publicUrlData } = supabase.storage.from('audios').getPublicUrl(fileName);
                                     recordingUrl = publicUrlData.publicUrl;
-                                    log(`✅ Audio Uploaded: ${recordingUrl}`, "SUCCESS");
                                 }
 
-                                // 6. TRANSCRIBE WITH WHISPER
                                 if (callMode === 'bridge') {
                                     finalTranscription = await transcribeWithWhisper(finalWavBuffer);
                                 }
-
-                            } catch (audioErr) {
-                                log(`❌ Audio Processing Error: ${audioErr.message}`, "ERROR");
-                            }
+                            } catch (audioErr) {}
                         }
 
-                        // --- SEND TO N8N ---
                         if (transcripts.length > 0 || recordingUrl || finalTranscription) {
                             let mainTranscript = "";
-                            
                             if (finalTranscription) {
                                 mainTranscript = finalTranscription;
                             } else {
-                                mainTranscript = transcripts
-                                    .map(t => `${t.role.toUpperCase()}: ${t.message}`)
-                                    .join('\n');
+                                mainTranscript = transcripts.map(t => `${t.role.toUpperCase()}: ${t.message}`).join('\n');
                             }
 
-                            log(`🚀 Triggering n8n Webhook...`, "WEBHOOK");
                             fetch(n8nUrl, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
@@ -631,8 +769,6 @@ fastify.register(async (fastifyInstance) => {
                                 })
                             }).catch(err => log(`Webhook Failed: ${err.message}`, "WEBHOOK"));
                         }
-                    } else {
-                        log(`ℹ️ n8n URL is empty/invalid. Skipping webhook trigger.`, "WEBHOOK");
                     }
                 }
             } catch (e) {
@@ -643,24 +779,12 @@ fastify.register(async (fastifyInstance) => {
         twilioWs.on('close', () => {
             if (openAiWs) openAiWs.close();
         });
-
-        const checkAndSendGreeting = () => {
-            if (streamSid && isSessionUpdated && !hasSentGreeting) {
-                openAiWs.send(JSON.stringify({
-                    type: 'response.create',
-                    response: {
-                        modalities: ['text', 'audio'],
-                        instructions: "Say 'Hello! I am ready to help you.' in a friendly tone."
-                    }
-                }));
-                hasSentGreeting = true;
-            }
-        };
     });
 });
 
 fastify.listen({ port: PORT, host: '0.0.0.0' }, (err) => {
     if (err) {
+        log(err.message, 'FATAL');
         process.exit(1);
     }
     log(`✅ SERVER READY ON PORT ${PORT}`, "SYSTEM");
