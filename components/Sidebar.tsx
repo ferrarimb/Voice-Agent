@@ -12,8 +12,8 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange }) => {
   return (
     <div className="w-16 md:w-64 h-screen bg-slate-900 border-r border-slate-800 flex flex-col">
       <div className="p-4 flex items-center gap-3 border-b border-slate-800 h-16">
-        <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white">
-            <PhoneCall size={20} />
+        <div className="w-8 h-8 flex items-center justify-center">
+            <img src="https://xtkorgedlxwfuaqyxguq.supabase.co/storage/v1/object/public/template-images/logo.png" alt="Bianca Voice Agent" className="w-full h-full object-contain" />
         </div>
         <span className="text-white font-bold text-xl hidden md:block">Bianca Voice Agent</span>
       </div>
