@@ -2,12 +2,12 @@
 /**
  * Vapi Clone Backend - Twilio <-> OpenAI Realtime API (GPT-4o Audio)
  * 
- * OPTIMIZED: v15 (Pure Audio Bridge)
+ * OPTIMIZED: v16 (Bug Fixes & Hardening)
  * Fixes: 
- * 1. REMOVED Upsampling (Source of "Low Motion" audio). Native 8kHz is preserved.
- * 2. Optimized Buffer handling to reduce jitter/robotic artifacts.
- * 3. Reduced Logging in hot-paths to prevent event loop blocking.
- * 4. Corrected WAV headers to match Twilio's G.711 u-law output (8000Hz).
+ * 1. Phone Number Sanitization (prevents <Dial> failures).
+ * 2. Query Param Deduplication (prevents "Name, Name" TTS).
+ * 3. XML Escaping (prevents TwiML crash on special chars).
+ * 4. N8N URL Validation (prevents fetch errors).
  */
 
 require('dotenv').config();
@@ -28,6 +28,33 @@ const log = (msg, type = 'INFO') => {
     if (type === 'BUFFER') return; 
     const time = new Date().toISOString().split('T')[1].slice(0, -1);
     console.log(`[${time}] [${type}] ${msg}`);
+};
+
+// Helper to sanitize phone numbers (remove spaces, parens, dashes)
+const sanitizePhone = (phone) => {
+    if (!phone) return '';
+    // Keep only digits and plus sign
+    return phone.replace(/[^0-9+]/g, '');
+};
+
+// Helper to escape XML special characters
+const escapeXml = (unsafe) => {
+    if (typeof unsafe !== 'string') return unsafe;
+    return unsafe.replace(/[<>&'"]/g, c => {
+        switch (c) {
+            case '<': return '&lt;';
+            case '>': return '&gt;';
+            case '&': return '&amp;';
+            case '\'': return '&apos;';
+            case '"': return '&quot;';
+        }
+    });
+};
+
+// Helper to get single value from potentially duplicated query params
+const getSingleParam = (param) => {
+    if (Array.isArray(param)) return param[0];
+    return param;
 };
 
 // --- AUDIO PROCESSING UTILS ---
@@ -173,10 +200,13 @@ const VOICE = 'alloy';
 fastify.options('/trigger-call', async (request, reply) => {
     return reply.send();
 });
+fastify.options('/webhook/speed-dial', async (request, reply) => {
+    return reply.send();
+});
 
-// 1. Trigger Call (Speed-to-Lead)
+// 1. Trigger Call (Speed-to-Lead) - FRONTEND VERSION
 fastify.post('/trigger-call', async (request, reply) => {
-    log(`[SPEED-DIAL] 🚀 Processando Trigger...`, "DEBUG");
+    log(`[SPEED-DIAL] 🚀 Processando Trigger (Frontend)...`, "DEBUG");
     try {
         const body = request.body;
         if (!body) return reply.status(400).send({ success: false, error: "Body missing" });
@@ -188,10 +218,10 @@ fastify.post('/trigger-call', async (request, reply) => {
         }
 
         const auth = Buffer.from(`${twilio_config.accountSid}:${twilio_config.authToken}`).toString('base64');
-        const callbackUrl = `${twilio_config.baseUrl}/connect-lead?lead_name=${encodeURIComponent(lead_name)}&lead_phone=${encodeURIComponent(lead_phone)}&horario=${encodeURIComponent(horario)}&n8n_url=${encodeURIComponent(n8n_url || '')}`;
+        const callbackUrl = `${twilio_config.baseUrl}/connect-lead?lead_name=${encodeURIComponent(lead_name)}&lead_phone=${encodeURIComponent(sanitizePhone(lead_phone))}&horario=${encodeURIComponent(horario)}&n8n_url=${encodeURIComponent(n8n_url || '')}`;
 
         const formData = new URLSearchParams();
-        formData.append('To', sdr_phone);
+        formData.append('To', sanitizePhone(sdr_phone));
         formData.append('From', twilio_config.fromNumber);
         formData.append('Url', callbackUrl); 
         formData.append('MachineDetection', 'Enable'); 
@@ -217,13 +247,107 @@ fastify.post('/trigger-call', async (request, reply) => {
     }
 });
 
+// 1.b. External Webhook (Portuguese Params + Credentials in Body)
+fastify.post('/webhook/speed-dial', async (request, reply) => {
+    log(`[WEBHOOK] 🌐 Recebendo Webhook Externo...`, "DEBUG");
+    try {
+        const body = request.body;
+        if (!body) return reply.status(400).send({ success: false, error: "Body missing" });
+
+        // 1. Map Params (Portuguese to Internal Logic)
+        const { 
+            nome_lead, 
+            data_agendamento, 
+            telefone_lead, 
+            telefone_sdr,
+            n8n_url, // Allow n8n_url to be passed directly in JSON
+            // Credentials mapping directly from body as requested
+            TWILIO_ACCOUNT_SID,
+            TWILIO_AUTH_TOKEN,
+            TWILIO_FROM_NUMBER
+        } = body;
+
+        // 2. Validate essential operational data
+        if (!nome_lead || !telefone_lead || !telefone_sdr) {
+            return reply.status(400).send({ success: false, error: "Faltando parametros obrigatorios: nome_lead, telefone_lead, telefone_sdr" });
+        }
+
+        const cleanSdrPhone = sanitizePhone(telefone_sdr);
+        const cleanLeadPhone = sanitizePhone(telefone_lead);
+
+        // 3. Resolve Credentials (Priority: JSON Body > Environment Variables)
+        const accountSid = TWILIO_ACCOUNT_SID || process.env.TWILIO_ACCOUNT_SID;
+        const authToken = TWILIO_AUTH_TOKEN || process.env.TWILIO_AUTH_TOKEN;
+        const fromNumber = TWILIO_FROM_NUMBER || process.env.TWILIO_FROM_NUMBER;
+
+        if (!accountSid || !authToken || !fromNumber) {
+            return reply.status(500).send({ 
+                success: false, 
+                error: "Credenciais Twilio ausentes. Envie no JSON (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER) ou configure no .env do servidor." 
+            });
+        }
+
+        // 4. Construct Callback URL
+        // We use the host header to determine where to callback (ngrok)
+        const protocol = request.protocol || 'https';
+        const host = request.headers.host;
+        const baseUrl = `${protocol}://${host}`;
+        
+        // Map 'data_agendamento' to 'horario' for the TTS engine
+        const horario = data_agendamento || "Agora";
+        
+        const callbackUrl = `${baseUrl}/connect-lead?lead_name=${encodeURIComponent(nome_lead)}&lead_phone=${encodeURIComponent(cleanLeadPhone)}&horario=${encodeURIComponent(horario)}&n8n_url=${encodeURIComponent(n8n_url || '')}`;
+
+        const auth = Buffer.from(`${accountSid}:${authToken}`).toString('base64');
+        const formData = new URLSearchParams();
+        formData.append('To', cleanSdrPhone);
+        formData.append('From', fromNumber);
+        formData.append('Url', callbackUrl); 
+        formData.append('MachineDetection', 'Enable'); 
+
+        log(`[WEBHOOK] Discando para SDR ${cleanSdrPhone} sobre Lead ${nome_lead}...`, "INFO");
+
+        const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Calls.json`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Basic ${auth}`,
+                'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            body: formData
+        });
+
+        if (!response.ok) {
+            const err = await response.json();
+            log(`[WEBHOOK] Erro Twilio: ${JSON.stringify(err)}`, "ERROR");
+            return reply.send({ success: false, error: err.message });
+        }
+        
+        const result = await response.json();
+        return reply.send({ success: true, sid: result.sid, message: "Conexão SDR Iniciada com Sucesso" });
+
+    } catch (e) {
+        log(`[WEBHOOK] Error: ${e.message}`, "ERROR");
+        return reply.status(500).send({ success: false, error: e.message });
+    }
+});
+
 // 2. Connect Lead (TwiML Webhook)
 fastify.all('/connect-lead', async (request, reply) => {
     const queryParams = request.query || {};
     const bodyParams = request.body || {};
     const host = request.headers.host;
     
-    const { lead_name, lead_phone, horario, n8n_url } = queryParams;
+    // IMPORTANT: Fix for duplicated params (e.g. lead_name=Keyth&lead_name=Keyth) which causes "Keyth, Keyth" TTS
+    const raw_lead_name = getSingleParam(queryParams.lead_name);
+    const raw_lead_phone = getSingleParam(queryParams.lead_phone);
+    const raw_horario = getSingleParam(queryParams.horario);
+    const raw_n8n_url = getSingleParam(queryParams.n8n_url);
+    
+    const lead_name = escapeXml(raw_lead_name || 'Cliente');
+    const lead_phone = sanitizePhone(raw_lead_phone);
+    const horario = escapeXml(raw_horario || 'agora');
+    const n8n_url = raw_n8n_url || '';
+
     const { AnsweredBy } = bodyParams;
     const wssUrl = `wss://${host}/media-stream`;
 
@@ -232,18 +356,22 @@ fastify.all('/connect-lead', async (request, reply) => {
         return reply.type('text/xml').send(twiml);
     }
     
+    // CallerId must be the Twilio Number (bodyParams.From in the context of the outbound call we just made)
+    // Or it can be the verified number.
+    const fromNumber = bodyParams.From || '';
+
     const twiml = `
     <Response>
         <Start>
             <Stream url="${wssUrl}" track="both_tracks">
-                <Parameter name="n8n_url" value="${n8n_url || ''}" />
+                <Parameter name="n8n_url" value="${escapeXml(n8n_url)}" />
                 <Parameter name="mode" value="bridge" />
             </Stream>
         </Start>
         <Say voice="Polly.Camila-Neural" language="pt-BR">
-            Novo lead: ${lead_name || 'Cliente'} para ${horario || 'agora'}. Conectando.
+            Novo lead: ${lead_name}. Agendado para ${horario}. Conectando chamada.
         </Say>
-        <Dial callerId="${bodyParams.From || ''}">
+        <Dial callerId="${fromNumber}" timeout="30">
             ${lead_phone}
         </Dial>
     </Response>
@@ -422,7 +550,7 @@ fastify.register(async (fastifyInstance) => {
                     log(`⏹️ Call Ended. Processing recording...`, "TWILIO");
                     if (openAiWs) openAiWs.close();
                     
-                    if (n8nUrl) {
+                    if (n8nUrl && n8nUrl.trim().length > 5) {
                         let recordingUrl = null;
                         let finalTranscription = null;
 
@@ -503,6 +631,8 @@ fastify.register(async (fastifyInstance) => {
                                 })
                             }).catch(err => log(`Webhook Failed: ${err.message}`, "WEBHOOK"));
                         }
+                    } else {
+                        log(`ℹ️ n8n URL is empty/invalid. Skipping webhook trigger.`, "WEBHOOK");
                     }
                 }
             } catch (e) {
