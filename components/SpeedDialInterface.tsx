@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Zap, User, Phone, Clock, AlertTriangle, Play, CheckCircle2, Loader2 } from 'lucide-react';
+import { User, Phone, Clock, AlertTriangle, Play, CheckCircle2, Loader2 } from 'lucide-react';
 import { TwilioConfig, CallLogEntry } from '../types';
 
 export interface SpeedDialState {
@@ -14,6 +14,29 @@ interface SpeedDialInterfaceProps {
   savedState?: SpeedDialState;
   onStateChange?: (state: SpeedDialState) => void;
 }
+
+// Custom Bridge Icon
+const BridgeIcon = ({ size = 24, className = "" }: { size?: number, className?: string }) => (
+  <svg 
+    width={size} 
+    height={size} 
+    viewBox="0 0 24 24" 
+    fill="none" 
+    stroke="currentColor" 
+    strokeWidth="1.5" 
+    strokeLinecap="round" 
+    strokeLinejoin="round"
+    className={className}
+  >
+    <path d="M3 21h18" />
+    <path d="M6 21V7" />
+    <path d="M18 21V7" />
+    <path d="M6 7Q12 16 18 7" />
+    <path d="M9 10v11" />
+    <path d="M12 12v9" />
+    <path d="M15 10v11" />
+  </svg>
+);
 
 const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({ 
   onCallLog, 
@@ -126,7 +149,7 @@ const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({
        <header className="h-24 flex items-center justify-between px-10 sticky top-0 z-20 backdrop-blur-xl bg-transparent border-b border-white/5">
         <div className="flex items-center gap-4">
             <div className="w-10 h-10 rounded-full bg-orange-500/20 flex items-center justify-center border border-orange-500/30 shadow-[0_0_15px_rgba(249,115,22,0.3)]">
-                <Zap size={20} className="text-orange-400" />
+                <BridgeIcon size={20} className="text-orange-400" />
             </div>
             <h1 className="text-white font-semibold text-2xl tracking-tight text-glow">Ponte SDR</h1>
         </div>

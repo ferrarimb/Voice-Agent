@@ -1,6 +1,29 @@
 import React from 'react';
-import { Phone, Settings, Activity, Bot, Zap } from 'lucide-react';
+import { Phone, Settings, Activity, Bot } from 'lucide-react';
 import { View } from '../types';
+
+// Custom Bridge Icon
+const BridgeIcon = ({ size = 24, className = "" }: { size?: number, className?: string }) => (
+  <svg 
+    width={size} 
+    height={size} 
+    viewBox="0 0 24 24" 
+    fill="none" 
+    stroke="currentColor" 
+    strokeWidth="1.5" 
+    strokeLinecap="round" 
+    strokeLinejoin="round"
+    className={className}
+  >
+    <path d="M3 21h18" />
+    <path d="M6 21V7" />
+    <path d="M18 21V7" />
+    <path d="M6 7Q12 16 18 7" />
+    <path d="M9 10v11" />
+    <path d="M12 12v9" />
+    <path d="M15 10v11" />
+  </svg>
+);
 
 interface SidebarProps {
   currentView: View;
@@ -10,13 +33,13 @@ interface SidebarProps {
 const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange }) => {
   return (
     <div className="w-20 md:w-24 h-screen z-30 flex flex-col items-center py-6 relative">
-      {/* Background Glass Strip */}
-      <div className="absolute left-0 top-0 bottom-0 w-full glass-panel border-r border-white/5 border-y-0 border-l-0" />
+      {/* Background Strip - Adjusted to skip the Logo area */}
+      <div className="absolute right-0 top-0 bottom-0 w-px bg-white/5 z-0" />
+      <div className="absolute left-0 top-28 bottom-0 w-full bg-white/[0.02] backdrop-blur-md border-t border-white/5 z-0" />
 
-      {/* Logo Area */}
-      <div className="relative z-10 w-12 h-12 mb-10 rounded-2xl overflow-hidden shadow-lg shadow-indigo-500/20 ring-1 ring-white/10 group cursor-pointer">
+      {/* Logo Area - No background, no border */}
+      <div className="relative z-10 w-12 h-12 mb-10 group cursor-pointer flex items-center justify-center bg-transparent">
           <img src="https://xtkorgedlxwfuaqyxguq.supabase.co/storage/v1/object/public/template-images/logo.png" alt="Bianca" className="w-full h-full object-contain opacity-80 group-hover:opacity-100 transition-opacity" />
-          <div className="absolute inset-0 bg-gradient-to-tr from-indigo-500/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
       </div>
 
       {/* Nav Items */}
@@ -34,7 +57,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange }) => {
           onClick={() => onViewChange('phone')}
         />
         <SidebarItem 
-          icon={<Zap size={22} />} 
+          icon={<BridgeIcon size={22} />} 
           label="Ponte" 
           active={currentView === 'speed-dial'} 
           onClick={() => onViewChange('speed-dial')}
