@@ -21,7 +21,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange }) => {
       <nav className="flex-1 py-6 space-y-2 px-2">
         <SidebarItem 
           icon={<Bot size={20} />} 
-          label="Agentes" 
+          label="Agente" 
           active={currentView === 'assistants'} 
           onClick={() => onViewChange('assistants')}
         />
@@ -33,7 +33,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange }) => {
         />
         <SidebarItem 
           icon={<Zap size={20} />} 
-          label="Conexão SDR->Lead" 
+          label="Ponte SDR->Lead" 
           active={currentView === 'speed-dial'} 
           onClick={() => onViewChange('speed-dial')}
         />
