@@ -20,7 +20,7 @@ Siga este roteiro básico:
 Se o cliente perguntar detalhes técnicos que você não sabe, diga que o corretor especialista poderá esclarecer tudo durante a visita.`;
 
 const DEFAULT_N8N_WEBHOOK = 'https://webhook-editor.abianca.com.br/webhook/retorno-new-vapi-ae75-6dfccb8f37d4';
-const DEFAULT_OPENAI_KEY = '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';
+const DEFAULT_OPENAI_KEY = ''; // Configure in Settings
 
 const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<View>('assistants');
@@ -55,18 +55,18 @@ const App: React.FC = () => {
     };
   });
 
-  // Twilio Settings - Pre-filled defaults as requested
+  // Twilio Settings - Load from localStorage only
   const [twilioConfig, setTwilioConfig] = useState<TwilioConfig>(() => {
     const savedConfig = localStorage.getItem('twilio_config');
     if (savedConfig) {
       return JSON.parse(savedConfig);
     }
-    // Specific Default credentials requested by user
+    // Empty defaults - user must configure in Settings
     return {
-      accountSid: 'AC3883d04e400fe1328cf490a389fa910a',
-      authToken: '37bc166feaaa030b1fddfae5fbf188b8',
-      fromNumber: '+5511993137410',
-      webhookUrl: 'https://uncandied-jeanene-pyruvic.ngrok-free.dev'
+      accountSid: '',
+      authToken: '',
+      fromNumber: '',
+      webhookUrl: ''
     };
   });
 
