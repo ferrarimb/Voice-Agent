@@ -11,15 +11,13 @@
  * 4. Adds robust fallback for N8N Webhook URL and Source identification.
  */
 
-import dotenv from 'dotenv';
-import Fastify from 'fastify';
-import fastifyWebsocket from '@fastify/websocket';
-import fastifyFormBody from '@fastify/formbody';
-import WebSocket from 'ws';
-import { createClient } from '@supabase/supabase-js';
-import crypto from 'crypto';
-
-dotenv.config();
+require('dotenv').config();
+const Fastify = require('fastify');
+const fastifyWebsocket = require('@fastify/websocket');
+const fastifyFormBody = require('@fastify/formbody');
+const WebSocket = require('ws');
+const { createClient } = require('@supabase/supabase-js');
+const crypto = require('crypto');
 
 const fastify = Fastify({
     logger: false // We use our own logger
