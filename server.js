@@ -403,12 +403,15 @@ fastify.post('/webhook/speed-dial', async (request, reply) => {
         const protocol = request.protocol || 'https';
         const host = request.headers.host;
         const baseUrl = `${protocol}://${host}`;
-        const horario = data_agendamento || "Agora";
+        
+        // Se não tiver data_agendamento, lead pediu para falar com especialista
+        const agendou = !!data_agendamento;
+        const horario = data_agendamento || "";
         
         // Apply fallback if n8n_url is missing or empty
         const finalN8nUrl = n8n_url || DEFAULT_N8N_WEBHOOK;
 
-        const callbackUrl = `${baseUrl}/connect-lead?lead_name=${encodeURIComponent(nome_lead)}&lead_phone=${encodeURIComponent(cleanLeadPhone)}&horario=${encodeURIComponent(horario)}&n8n_url=${encodeURIComponent(finalN8nUrl)}`;
+        const callbackUrl = `${baseUrl}/connect-lead?lead_name=${encodeURIComponent(nome_lead)}&lead_phone=${encodeURIComponent(cleanLeadPhone)}&horario=${encodeURIComponent(horario)}&agendou=${agendou}&n8n_url=${encodeURIComponent(finalN8nUrl)}`;
 
         const auth = Buffer.from(`${accountSid}:${authToken}`).toString('base64');
         const formData = new URLSearchParams();
@@ -460,7 +463,8 @@ fastify.all('/connect-lead', async (request, reply) => {
     
     const lead_name = escapeXml(raw_lead_name || 'Cliente');
     const lead_phone = sanitizePhone(raw_lead_phone);
-    const horario = escapeXml(raw_horario || 'agora');
+    const horario = escapeXml(raw_horario || '');
+    const agendou = getSingleParam(queryParams.agendou) !== 'false';
     // Fallback to default
     const n8n_url = raw_n8n_url || DEFAULT_N8N_WEBHOOK;
 
@@ -487,7 +491,7 @@ fastify.all('/connect-lead', async (request, reply) => {
             </Stream>
         </Start>
         <Say voice="Polly.Camila-Neural" language="pt-BR">
-            Novo lead: ${lead_name}. Agendado para ${horario}. Conectando chamada.
+            Novo lead: ${lead_name}. ${agendou ? `Agendado para ${horario}.` : 'Pediu para falar com especialista.'} Conectando chamada.
         </Say>
         <Dial callerId="${fromNumber}" timeout="30">
             ${lead_phone}
