@@ -577,6 +577,13 @@ fastify.register(async (fastifyInstance) => {
                     },
                 });
 
+                openAiWs.on('error', (err) => {
+                    // Prevent Node from crashing due to unhandled WebSocket errors (ex: 401)
+                    const msg = err && err.message ? err.message : String(err);
+                    log(`❌ OpenAI WebSocket Error: ${msg}`, "ERROR");
+                    isOpenAiConnected = false;
+                });
+
                 openAiWs.on('open', () => {
                     log(`🤖 OpenAI Connected [Provider: ${activeProvider}]`, "OPENAI");
                     isOpenAiConnected = true;
