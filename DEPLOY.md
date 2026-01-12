@@ -187,7 +187,8 @@ O sistema usa automaticamente:
   "TWILIO_ACCOUNT_SID": "ACxxxx",
   "TWILIO_AUTH_TOKEN": "xxxx",
   "TWILIO_FROM_NUMBER": "+5511993137410",
-  "OPENAI_KEY": "sk-proj-xxx (OPCIONAL)"
+  "OPENAI_KEY": "sk-proj-xxx (OPCIONAL)",
+  "token": "userToken123 (OPCIONAL)"
 }
 ```
 
@@ -195,6 +196,10 @@ O sistema usa automaticamente:
 - Se fornecido, será usado para transcrição do áudio via Whisper API
 - Permite usar uma chave diferente da configurada no servidor
 - Se não fornecido, usa a chave padrão do servidor
+
+**Campo `token` (opcional):**
+- Token do usuário para identificação no webhook de retorno (fallback)
+- Se não fornecido, o webhook de retorno enviará `"sem_token"`
 
 #### Webhook de Retorno (Fallback)
 
@@ -213,7 +218,8 @@ O webhook de retorno é **sempre enviado** ao final da chamada, mesmo se a trans
   "timestamp": "2024-01-15T14:30:00.000Z",
   "status": "success",
   "mode": "bridge",
-  "source": "bridge"
+  "source": "bridge",
+  "token": "userToken123 ou sem_token"
 }
 ```
 
@@ -221,6 +227,9 @@ O webhook de retorno é **sempre enviado** ao final da chamada, mesmo se a trans
 - **`transcript`** - Transcrição combinada com labels `[SDR]` e `[LEAD]`
 - **`sdr_transcript`** - Somente o que o SDR falou
 - **`lead_transcript`** - Somente o que o Lead falou
+
+**Campo `token`:**
+- Retorna o token enviado na requisição original ou `"sem_token"` se não foi fornecido
 
 > ⚠️ Se a transcrição falhar, os campos de transcrição virão vazios mas o webhook ainda será enviado.
 

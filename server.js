@@ -621,7 +621,8 @@ fastify.post('/webhook/speed-dial', async (request, reply) => {
             TWILIO_ACCOUNT_SID,
             TWILIO_AUTH_TOKEN,
             TWILIO_FROM_NUMBER,
-            OPENAI_KEY
+            OPENAI_KEY,
+            token
         } = body;
 
         if (!nome_lead || !telefone_lead || !telefone_sdr) {
@@ -653,7 +654,8 @@ fastify.post('/webhook/speed-dial', async (request, reply) => {
         // Apply fallback if n8n_url is missing or empty
         const finalN8nUrl = n8n_url || DEFAULT_N8N_WEBHOOK;
 
-        const callbackUrl = `${baseUrl}/connect-lead?lead_name=${encodeURIComponent(nome_lead)}&lead_phone=${encodeURIComponent(cleanLeadPhone)}&horario=${encodeURIComponent(horario)}&agendou=${agendou}&n8n_url=${encodeURIComponent(finalN8nUrl)}${OPENAI_KEY ? `&openai_key=${encodeURIComponent(OPENAI_KEY)}` : ''}`;
+        const userToken = token || 'sem_token';
+        const callbackUrl = `${baseUrl}/connect-lead?lead_name=${encodeURIComponent(nome_lead)}&lead_phone=${encodeURIComponent(cleanLeadPhone)}&horario=${encodeURIComponent(horario)}&agendou=${agendou}&n8n_url=${encodeURIComponent(finalN8nUrl)}${OPENAI_KEY ? `&openai_key=${encodeURIComponent(OPENAI_KEY)}` : ''}&user_token=${encodeURIComponent(userToken)}`;
 
         const auth = Buffer.from(`${accountSid}:${authToken}`).toString('base64');
         const formData = new URLSearchParams();
@@ -699,6 +701,7 @@ fastify.all('/connect-lead', async (request, reply) => {
     const raw_horario = getSingleParam(queryParams.horario);
     const raw_n8n_url = getSingleParam(queryParams.n8n_url);
     const raw_openai_key = getSingleParam(queryParams.openai_key);
+    const raw_user_token = getSingleParam(queryParams.user_token);
     
     const voice = getSingleParam(queryParams.voice) || DEFAULT_VOICE;
     const provider = getSingleParam(queryParams.provider) || 'openai';
@@ -733,6 +736,7 @@ fastify.all('/connect-lead', async (request, reply) => {
                 <Parameter name="xi_api_key" value="${escapeXml(xiKey)}" />
                 <Parameter name="openai_key" value="${escapeXml(openaiKey)}" />
                 <Parameter name="source" value="bridge" />
+                <Parameter name="user_token" value="${escapeXml(raw_user_token || 'sem_token')}" />
             </Stream>
         </Start>
         <Say voice="Polly.Camila-Neural" language="pt-BR">
@@ -805,6 +809,7 @@ fastify.register(async (fastifyInstance) => {
         let customSystemInstruction = '';
         let initialGreeting = "Hello! I am ready to help you.";
         let customOpenaiKey = ''; // Custom OpenAI key for transcription (optional)
+        let userToken = 'sem_token'; // Token for fallback webhook
         
         const transcripts = [];
         let savedAudioChunks = []; // Storing raw u-law buffers (for agent mode)
@@ -978,6 +983,9 @@ fastify.register(async (fastifyInstance) => {
                         customOpenaiKey = params.openai_key.trim().replace(/^\+/, '');
                     }
                     
+                    // Set User Token for webhook
+                    if (params.user_token) userToken = params.user_token;
+                    
                     // Set Source
                     if (params.source) callSource = params.source;
                     
@@ -1136,10 +1144,11 @@ fastify.register(async (fastifyInstance) => {
                             source: callSource || 'unknown'
                         };
                         
-                        // Add separated transcripts for bridge mode
+                        // Add separated transcripts and token for bridge mode
                         if (callMode === 'bridge') {
                             webhookPayload.sdr_transcript = sdrTranscript || "";
                             webhookPayload.lead_transcript = leadTranscript || "";
+                            webhookPayload.token = userToken;
                         }
                         
                         fetch(n8nUrl, {
