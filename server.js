@@ -411,6 +411,73 @@ async function transcribeBridgeCall(inboundPcm, outboundPcm, apiKey = null) {
     return results;
 }
 
+// --- SDR ANSWER DETECTION (Voicemail vs Real Person) ---
+async function analyzeSDRAnswer(transcript, apiKey = null) {
+    const useKey = apiKey || OPENAI_API_KEY;
+    
+    try {
+        log(`🔍 Analisando resposta do SDR: "${transcript}"`, "DETECTION");
+        
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${useKey}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                model: 'gpt-4o-mini',
+                messages: [
+                    {
+                        role: 'system',
+                        content: `Você é um detector de caixa postal/secretária eletrônica.
+
+Analise a transcrição da primeira fala de uma ligação telefônica e determine se:
+1. É uma PESSOA REAL atendendo (ex: "Alô", "Oi", "Fala", "Bianca", "Quem é?", nome da pessoa, etc)
+2. É uma CAIXA POSTAL ou SECRETÁRIA ELETRÔNICA (ex: "Você ligou para...", "Deixe sua mensagem", "não está disponível", "após o sinal", promoções automáticas, etc)
+
+Responda APENAS com um JSON no formato:
+{"is_human": true/false, "confidence": 0.0-1.0, "reason": "breve explicação"}
+
+Seja rigoroso: na dúvida, assuma que é caixa postal para evitar conectar leads a mensagens automáticas.`
+                    },
+                    {
+                        role: 'user',
+                        content: `Transcrição: "${transcript}"`
+                    }
+                ],
+                temperature: 0.1,
+                max_tokens: 100
+            })
+        });
+        
+        const data = await response.json();
+        if (data.error) throw new Error(data.error.message);
+        
+        const content = data.choices[0]?.message?.content || '{}';
+        
+        // Parse JSON response
+        const jsonMatch = content.match(/\{[^}]+\}/);
+        if (jsonMatch) {
+            const result = JSON.parse(jsonMatch[0]);
+            log(`✅ Detecção: is_human=${result.is_human}, confidence=${result.confidence}, reason="${result.reason}"`, "DETECTION");
+            return {
+                isHuman: result.is_human === true,
+                confidence: result.confidence || 0,
+                reason: result.reason || 'unknown'
+            };
+        }
+        
+        // Fallback: assume não é humano se não conseguiu parsear
+        log(`⚠️ Não foi possível parsear resposta, assumindo caixa postal`, "DETECTION");
+        return { isHuman: false, confidence: 0, reason: 'parse_error' };
+        
+    } catch (e) {
+        log(`❌ Erro na detecção SDR: ${e.message}`, "ERROR");
+        // Em caso de erro, assume que não é humano para segurança
+        return { isHuman: false, confidence: 0, reason: `error: ${e.message}` };
+    }
+}
+
 // --- ELEVENLABS HELPER ---
 async function streamElevenLabsAudio(text, voiceId, apiKey, twilioWs, streamSid) {
     if (!text || !text.trim()) return;
@@ -691,12 +758,13 @@ fastify.post('/webhook/speed-dial', async (request, reply) => {
     }
 });
 
-// 2. Connect Lead (TwiML Webhook)
+// 2. Connect Lead - Step 1: Capture SDR voice and verify human
 fastify.all('/connect-lead', async (request, reply) => {
-    log(`[CONNECT-LEAD] Initializing Bridge Call...`, "DEBUG");
+    log(`[CONNECT-LEAD] Step 1: Capturing SDR voice for verification...`, "DEBUG");
     const queryParams = request.query || {};
     const bodyParams = request.body || {};
     const host = request.headers.host;
+    const protocol = request.headers['x-forwarded-proto'] || 'https';
     
     const raw_lead_name = getSingleParam(queryParams.lead_name);
     const raw_lead_phone = getSingleParam(queryParams.lead_phone);
@@ -705,6 +773,60 @@ fastify.all('/connect-lead', async (request, reply) => {
     const raw_openai_key = getSingleParam(queryParams.openai_key);
     const raw_user_token = getSingleParam(queryParams.user_token);
     const raw_lead_id = getSingleParam(queryParams.lead_id);
+    const agendou = getSingleParam(queryParams.agendou) !== 'false';
+    
+    const lead_name = escapeXml(raw_lead_name || 'Cliente');
+    const lead_phone = sanitizePhone(raw_lead_phone);
+    const horario = escapeXml(raw_horario || '');
+    const n8n_url = raw_n8n_url || DEFAULT_N8N_WEBHOOK;
+    const fromNumber = bodyParams.From || '';
+
+    const { AnsweredBy } = bodyParams;
+
+    // Machine Detection from Twilio
+    if (AnsweredBy && (AnsweredBy.startsWith('machine') || AnsweredBy === 'fax')) {
+        log(`[CONNECT-LEAD] ❌ Machine detected by Twilio: ${AnsweredBy}`, "DETECTION");
+        const twiml = `<Response><Hangup/></Response>`;
+        return reply.type('text/xml').send(twiml);
+    }
+    
+    // Build callback URL for verification step
+    const verifyUrl = `${protocol}://${host}/verify-sdr?lead_name=${encodeURIComponent(raw_lead_name || '')}&lead_phone=${encodeURIComponent(raw_lead_phone || '')}&horario=${encodeURIComponent(raw_horario || '')}&agendou=${agendou}&n8n_url=${encodeURIComponent(n8n_url)}&openai_key=${encodeURIComponent(raw_openai_key || '')}&user_token=${encodeURIComponent(raw_user_token || 'sem_token')}&lead_id=${encodeURIComponent(raw_lead_id || 'sem_lead_id')}&from_number=${encodeURIComponent(fromNumber)}`;
+
+    // Use Gather with speech recognition to capture SDR's first words
+    const twiml = `
+    <Response>
+        <Say voice="Polly.Camila-Neural" language="pt-BR">
+            Novo lead: ${lead_name}. ${agendou ? `Agendado para ${horario}.` : 'Pediu para falar com especialista.'}
+        </Say>
+        <Gather input="speech" timeout="3" speechTimeout="2" language="pt-BR" action="${escapeXml(verifyUrl)}" method="POST">
+            <Say voice="Polly.Camila-Neural" language="pt-BR">
+                Diga algo para confirmar.
+            </Say>
+        </Gather>
+        <Redirect>${escapeXml(verifyUrl)}&amp;speech_result=timeout</Redirect>
+    </Response>
+    `;
+    reply.type('text/xml').send(twiml);
+});
+
+// 2b. Verify SDR Response - Analyze if human or voicemail
+fastify.all('/verify-sdr', async (request, reply) => {
+    log(`[VERIFY-SDR] Analyzing SDR response...`, "DEBUG");
+    const queryParams = request.query || {};
+    const bodyParams = request.body || {};
+    const host = request.headers.host;
+    const protocol = request.headers['x-forwarded-proto'] || 'https';
+    
+    const raw_lead_name = getSingleParam(queryParams.lead_name);
+    const raw_lead_phone = getSingleParam(queryParams.lead_phone);
+    const raw_horario = getSingleParam(queryParams.horario);
+    const raw_n8n_url = getSingleParam(queryParams.n8n_url);
+    const raw_openai_key = getSingleParam(queryParams.openai_key);
+    const raw_user_token = getSingleParam(queryParams.user_token) || 'sem_token';
+    const raw_lead_id = getSingleParam(queryParams.lead_id) || 'sem_lead_id';
+    const agendou = getSingleParam(queryParams.agendou) !== 'false';
+    const fromNumber = getSingleParam(queryParams.from_number) || '';
     
     const voice = getSingleParam(queryParams.voice) || DEFAULT_VOICE;
     const provider = getSingleParam(queryParams.provider) || 'openai';
@@ -713,45 +835,104 @@ fastify.all('/connect-lead', async (request, reply) => {
     
     const lead_name = escapeXml(raw_lead_name || 'Cliente');
     const lead_phone = sanitizePhone(raw_lead_phone);
-    const horario = escapeXml(raw_horario || '');
-    const agendou = getSingleParam(queryParams.agendou) !== 'false';
-    // Fallback to default
     const n8n_url = raw_n8n_url || DEFAULT_N8N_WEBHOOK;
-
-    const { AnsweredBy } = bodyParams;
-    const wssUrl = `wss://${host}/media-stream`;
-
-    if (AnsweredBy && (AnsweredBy.startsWith('machine') || AnsweredBy === 'fax')) {
-        const twiml = `<Response><Hangup/></Response>`;
-        return reply.type('text/xml').send(twiml);
+    
+    // Get speech result from Twilio Gather
+    const speechResult = bodyParams.SpeechResult || getSingleParam(queryParams.speech_result) || '';
+    const confidence = parseFloat(bodyParams.Confidence || '0');
+    
+    log(`[VERIFY-SDR] Speech Result: "${speechResult}" (confidence: ${confidence})`, "DETECTION");
+    
+    let sdrAnswered = false;
+    let detectionReason = 'no_speech';
+    let detectionConfidence = 0;
+    
+    // Analyze the speech if we got any
+    if (speechResult && speechResult !== 'timeout' && speechResult.trim().length > 0) {
+        const analysis = await analyzeSDRAnswer(speechResult, openaiKey || null);
+        sdrAnswered = analysis.isHuman;
+        detectionReason = analysis.reason;
+        detectionConfidence = analysis.confidence;
+    } else if (speechResult === 'timeout') {
+        log(`[VERIFY-SDR] ⚠️ No speech detected (timeout)`, "DETECTION");
+        detectionReason = 'timeout_no_speech';
     }
     
-    const fromNumber = bodyParams.From || '';
-
-    const twiml = `
-    <Response>
-        <Start>
-            <Stream url="${wssUrl}" track="both_tracks">
-                <Parameter name="n8n_url" value="${escapeXml(n8n_url)}" />
-                <Parameter name="mode" value="bridge" />
-                <Parameter name="voice" value="${escapeXml(voice)}" />
-                <Parameter name="provider" value="${escapeXml(provider)}" />
-                <Parameter name="xi_api_key" value="${escapeXml(xiKey)}" />
-                <Parameter name="openai_key" value="${escapeXml(openaiKey)}" />
-                <Parameter name="source" value="bridge" />
-                <Parameter name="user_token" value="${escapeXml(raw_user_token || 'sem_token')}" />
-                <Parameter name="lead_id" value="${escapeXml(raw_lead_id || 'sem_lead_id')}" />
-            </Stream>
-        </Start>
-        <Say voice="Polly.Camila-Neural" language="pt-BR">
-            Novo lead: ${lead_name}. ${agendou ? `Agendado para ${horario}.` : 'Pediu para falar com especialista.'} Conectando chamada.
-        </Say>
-        <Dial callerId="${fromNumber}" timeout="30">
-            ${lead_phone}
-        </Dial>
-    </Response>
-    `;
-    reply.type('text/xml').send(twiml);
+    const wssUrl = `wss://${host}/media-stream`;
+    
+    if (sdrAnswered) {
+        log(`[VERIFY-SDR] ✅ SDR confirmed as HUMAN. Connecting to Lead...`, "DETECTION");
+        
+        // SDR is human - proceed with bridge
+        const twiml = `
+        <Response>
+            <Start>
+                <Stream url="${wssUrl}" track="both_tracks">
+                    <Parameter name="n8n_url" value="${escapeXml(n8n_url)}" />
+                    <Parameter name="mode" value="bridge" />
+                    <Parameter name="voice" value="${escapeXml(voice)}" />
+                    <Parameter name="provider" value="${escapeXml(provider)}" />
+                    <Parameter name="xi_api_key" value="${escapeXml(xiKey)}" />
+                    <Parameter name="openai_key" value="${escapeXml(openaiKey)}" />
+                    <Parameter name="source" value="bridge" />
+                    <Parameter name="user_token" value="${escapeXml(raw_user_token)}" />
+                    <Parameter name="lead_id" value="${escapeXml(raw_lead_id)}" />
+                    <Parameter name="sdr_answered" value="true" />
+                    <Parameter name="sdr_detection_reason" value="${escapeXml(detectionReason)}" />
+                    <Parameter name="sdr_detection_confidence" value="${detectionConfidence}" />
+                    <Parameter name="sdr_first_words" value="${escapeXml(speechResult)}" />
+                </Stream>
+            </Start>
+            <Say voice="Polly.Camila-Neural" language="pt-BR">
+                Conectando com o lead agora.
+            </Say>
+            <Dial callerId="${escapeXml(fromNumber)}" timeout="30">
+                ${lead_phone}
+            </Dial>
+        </Response>
+        `;
+        reply.type('text/xml').send(twiml);
+    } else {
+        log(`[VERIFY-SDR] ❌ SDR NOT confirmed (${detectionReason}). Hanging up.`, "DETECTION");
+        
+        // Send webhook notification about failed detection
+        if (n8n_url && n8n_url.trim().length > 5) {
+            const failPayload = {
+                assistantName: "Speed Dial Bridge",
+                transcript: "",
+                sdr_transcript: "",
+                lead_transcript: "",
+                realtime_messages: [],
+                recordingUrl: "",
+                timestamp: new Date().toISOString(),
+                status: 'sdr_not_answered',
+                mode: 'bridge',
+                source: 'bridge',
+                token: raw_user_token,
+                lead_id: raw_lead_id,
+                sdr_answered: false,
+                sdr_detection_reason: detectionReason,
+                sdr_detection_confidence: detectionConfidence,
+                sdr_first_words: speechResult || ''
+            };
+            
+            fetch(n8n_url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(failPayload)
+            }).catch(err => log(`❌ Webhook failed: ${err.message}`, "WEBHOOK"));
+        }
+        
+        const twiml = `
+        <Response>
+            <Say voice="Polly.Camila-Neural" language="pt-BR">
+                Não foi possível confirmar o atendimento. A ligação será encerrada.
+            </Say>
+            <Hangup/>
+        </Response>
+        `;
+        reply.type('text/xml').send(twiml);
+    }
 });
 
 // 3. Incoming Call
@@ -815,6 +996,12 @@ fastify.register(async (fastifyInstance) => {
         let customOpenaiKey = ''; // Custom OpenAI key for transcription (optional)
         let userToken = 'sem_token'; // Token for fallback webhook
         let leadId = 'sem_lead_id'; // Lead ID for fallback webhook
+        
+        // SDR Detection fields (populated from /verify-sdr)
+        let sdrAnswered = true; // Default true since we only get here if verified
+        let sdrDetectionReason = '';
+        let sdrDetectionConfidence = 0;
+        let sdrFirstWords = '';
         
         const transcripts = [];
         let savedAudioChunks = []; // Storing raw u-law buffers (for agent mode)
@@ -997,6 +1184,12 @@ fastify.register(async (fastifyInstance) => {
                     // Set Source
                     if (params.source) callSource = params.source;
                     
+                    // SDR Detection fields (from /verify-sdr)
+                    if (params.sdr_answered) sdrAnswered = params.sdr_answered === 'true';
+                    if (params.sdr_detection_reason) sdrDetectionReason = params.sdr_detection_reason;
+                    if (params.sdr_detection_confidence) sdrDetectionConfidence = parseFloat(params.sdr_detection_confidence) || 0;
+                    if (params.sdr_first_words) sdrFirstWords = params.sdr_first_words;
+                    
                     // Log if custom OpenAI key is provided
                     if (customOpenaiKey) {
                         log(`🔑 Custom OpenAI Key provided for transcription (len=${customOpenaiKey.length})`, "DEBUG");
@@ -1158,6 +1351,11 @@ fastify.register(async (fastifyInstance) => {
                             webhookPayload.lead_transcript = leadTranscript || "";
                             webhookPayload.token = userToken;
                             webhookPayload.lead_id = leadId;
+                            // SDR Detection fields
+                            webhookPayload.sdr_answered = sdrAnswered;
+                            webhookPayload.sdr_detection_reason = sdrDetectionReason || "";
+                            webhookPayload.sdr_detection_confidence = sdrDetectionConfidence;
+                            webhookPayload.sdr_first_words = sdrFirstWords || "";
                         }
                         
                         fetch(n8nUrl, {

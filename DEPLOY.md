@@ -210,7 +210,7 @@ O sistema usa automaticamente:
 
 O webhook de retorno é **sempre enviado** ao final da chamada, mesmo se a transcrição falhar.
 
-**Payload do webhook de retorno (modo bridge):**
+**Payload do webhook de retorno (modo bridge - chamada conectada):**
 
 ```json
 {
@@ -225,7 +225,34 @@ O webhook de retorno é **sempre enviado** ao final da chamada, mesmo se a trans
   "mode": "bridge",
   "source": "bridge",
   "token": "userToken123 ou sem_token",
-  "lead_id": "lead123 ou sem_lead_id"
+  "lead_id": "lead123 ou sem_lead_id",
+  "sdr_answered": true,
+  "sdr_detection_reason": "saudacao_humana",
+  "sdr_detection_confidence": 0.95,
+  "sdr_first_words": "Alô"
+}
+```
+
+**Payload do webhook quando SDR NÃO atende (caixa postal/máquina):**
+
+```json
+{
+  "assistantName": "Speed Dial Bridge",
+  "transcript": "",
+  "sdr_transcript": "",
+  "lead_transcript": "",
+  "realtime_messages": [],
+  "recordingUrl": "",
+  "timestamp": "2024-01-15T14:30:00.000Z",
+  "status": "sdr_not_answered",
+  "mode": "bridge",
+  "source": "bridge",
+  "token": "userToken123 ou sem_token",
+  "lead_id": "lead123 ou sem_lead_id",
+  "sdr_answered": false,
+  "sdr_detection_reason": "voicemail_detected",
+  "sdr_detection_confidence": 0.9,
+  "sdr_first_words": "Você ligou para o número..."
 }
 ```
 
@@ -240,7 +267,44 @@ O webhook de retorno é **sempre enviado** ao final da chamada, mesmo se a trans
 **Campo `lead_id`:**
 - Retorna o lead_id enviado na requisição original ou `"sem_lead_id"` se não foi fornecido
 
+**Campos de Detecção SDR (novos):**
+- **`sdr_answered`** - `true` se confirmado humano, `false` se caixa postal/máquina
+- **`sdr_detection_reason`** - Motivo da detecção (ex: "saudacao_humana", "voicemail_detected", "timeout_no_speech")
+- **`sdr_detection_confidence`** - Confiança da detecção (0.0 a 1.0)
+- **`sdr_first_words`** - Primeiras palavras detectadas do SDR
+
 > ⚠️ Se a transcrição falhar, os campos de transcrição virão vazios mas o webhook ainda será enviado.
+
+---
+
+### Detecção Inteligente de Caixa Postal
+
+O sistema agora inclui **verificação automática** para detectar se o SDR realmente atendeu ou se a chamada caiu em caixa postal/secretária eletrônica.
+
+#### Como Funciona
+
+1. **Twilio Machine Detection** - Primeira camada de detecção automática do Twilio
+2. **Captura de Voz** - O sistema pede ao SDR para "dizer algo para confirmar"
+3. **Análise com GPT-4o-mini** - A primeira fala é analisada por IA para determinar:
+   - ✅ **Humano**: "Alô", "Oi", "Fala", "Bianca", etc.
+   - ❌ **Caixa Postal**: "Você ligou para...", "Deixe sua mensagem", promoções automáticas, etc.
+
+4. **Decisão**:
+   - Se **humano confirmado** → Conecta ao Lead
+   - Se **caixa postal/máquina** → Desliga e envia webhook com `status: "sdr_not_answered"`
+
+#### Fluxo de Endpoints
+
+```
+/webhook/speed-dial → Liga para SDR
+        ↓
+/connect-lead → Captura primeira fala do SDR (Gather)
+        ↓
+/verify-sdr → Analisa com OpenAI
+        ↓
+Se humano: /media-stream → Conecta ao Lead
+Se máquina: Hangup + Webhook de falha
+```
 
 ---
 
