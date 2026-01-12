@@ -146,14 +146,34 @@ docker stack deploy -c docker-compose.yml voice-agent
 3. Atualize seu `.env` local (não commite!)
 4. Configure na interface web em **Settings → Twilio Config**
 
+**Comando completo para rebuild após atualizar token:**
+```bash
+ssh root@167.99.233.112
+cd /opt/voice-agent
+nano docker-compose.yml  # Edite o token
+docker stack rm voice-agent && sleep 10 && docker build -t voice-agent:latest --no-cache . && docker stack deploy -c docker-compose.yml voice-agent
+```
+
 ---
 
 ## Configuração do Twilio
+
+### Para receber chamadas (Phone Interface)
 
 No painel do Twilio, configure o webhook do número:
 
 - **URL**: `https://voice.abianca.com.br/incoming-call`
 - **Método**: `POST`
+
+### Para Speed Dial (ponte SDR → Lead)
+
+Na interface web (**Settings → Twilio Config**):
+
+- **Webhook URL**: `https://voice.abianca.com.br`
+
+O sistema usa automaticamente:
+- `/incoming-call` - Para chamadas recebidas
+- `/webhook/speed-dial` - Para discagem automática (ponte SDR-Lead)
 
 ---
 
