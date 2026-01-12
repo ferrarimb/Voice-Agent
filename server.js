@@ -96,23 +96,45 @@ function decodeMuLawBuffer(buffer) {
     return int16;
 }
 
-// 3. Create WAV Header (Standard 8kHz, 16-bit, Mono for Telephony)
-function createWavHeader(dataLength, sampleRate = 8000) {
+// 3. Create WAV Header (Standard 8kHz, 16-bit, configurable channels)
+function createWavHeader(dataLength, sampleRate = 8000, numChannels = 1) {
     const buffer = Buffer.alloc(44);
+    const blockAlign = numChannels * 2; // 2 bytes per sample (16-bit)
+    const byteRate = sampleRate * blockAlign;
+    
     buffer.write('RIFF', 0);
     buffer.writeUInt32LE(36 + dataLength, 4);
     buffer.write('WAVE', 8);
     buffer.write('fmt ', 12);
     buffer.writeUInt32LE(16, 16); // PCM
-    buffer.writeUInt16LE(1, 20);  // Mono
-    buffer.writeUInt16LE(1, 22);  // Channels
+    buffer.writeUInt16LE(1, 20);  // Audio format (1 = PCM)
+    buffer.writeUInt16LE(numChannels, 22);  // Channels
     buffer.writeUInt32LE(sampleRate, 24);
-    buffer.writeUInt32LE(sampleRate * 2, 28); // Byte Rate (SampleRate * BlockAlign)
-    buffer.writeUInt16LE(2, 32);  // Block Align (Channels * Bits/8)
+    buffer.writeUInt32LE(byteRate, 28); // Byte Rate
+    buffer.writeUInt16LE(blockAlign, 32);  // Block Align
     buffer.writeUInt16LE(16, 34); // Bits per Sample
     buffer.write('data', 36);
     buffer.writeUInt32LE(dataLength, 40);
     return buffer;
+}
+
+// 4. Create Stereo WAV from two mono tracks (interleave samples)
+function createStereoWav(inboundPcm, outboundPcm, sampleRate = 8000) {
+    // Use the longer track length, pad shorter one with silence
+    const maxLength = Math.max(inboundPcm.length, outboundPcm.length);
+    
+    // Interleave: Left channel = inbound (Lead), Right channel = outbound (SDR)
+    const stereoData = new Int16Array(maxLength * 2);
+    
+    for (let i = 0; i < maxLength; i++) {
+        // Left channel (inbound/Lead)
+        stereoData[i * 2] = i < inboundPcm.length ? inboundPcm[i] : 0;
+        // Right channel (outbound/SDR)
+        stereoData[i * 2 + 1] = i < outboundPcm.length ? outboundPcm[i] : 0;
+    }
+    
+    const wavHeader = createWavHeader(stereoData.byteLength, sampleRate, 2);
+    return Buffer.concat([wavHeader, Buffer.from(stereoData.buffer)]);
 }
 
 // --- SUPABASE CONFIG ---
@@ -561,7 +583,9 @@ fastify.register(async (fastifyInstance) => {
         let initialGreeting = "Hello! I am ready to help you.";
         
         const transcripts = [];
-        let savedAudioChunks = []; // Storing raw u-law buffers
+        let savedAudioChunks = []; // Storing raw u-law buffers (for agent mode)
+        let inboundAudioChunks = []; // Track: inbound (Lead) - for bridge mode
+        let outboundAudioChunks = []; // Track: outbound (SDR) - for bridge mode
         let openAiAudioQueue = [];
 
         log(`🔌 Socket Connection Initiated`, "TWILIO");
@@ -741,7 +765,19 @@ fastify.register(async (fastifyInstance) => {
                 } else if (data.event === 'media') {
                     if (data.media.payload) {
                         const chunkBuffer = Buffer.from(data.media.payload, 'base64');
-                        savedAudioChunks.push(chunkBuffer);
+                        const track = data.media.track; // 'inbound' or 'outbound' (only in both_tracks mode)
+                        
+                        // BRIDGE MODE: Separate tracks to avoid mixing audio streams
+                        if (callMode === 'bridge' && track) {
+                            if (track === 'inbound') {
+                                inboundAudioChunks.push(chunkBuffer);
+                            } else if (track === 'outbound') {
+                                outboundAudioChunks.push(chunkBuffer);
+                            }
+                        } else {
+                            // AGENT MODE: Single track
+                            savedAudioChunks.push(chunkBuffer);
+                        }
 
                         if (isOpenAiConnected && openAiWs.readyState === WebSocket.OPEN) {
                             openAiWs.send(JSON.stringify({
@@ -761,12 +797,49 @@ fastify.register(async (fastifyInstance) => {
                         let recordingUrl = null;
                         let finalTranscription = null;
 
-                        if (savedAudioChunks.length > 0) {
+                        // BRIDGE MODE: Process separated tracks into stereo WAV
+                        if (callMode === 'bridge' && (inboundAudioChunks.length > 0 || outboundAudioChunks.length > 0)) {
+                            try {
+                                log(`💾 Processing BRIDGE audio: ${inboundAudioChunks.length} inbound chunks, ${outboundAudioChunks.length} outbound chunks`, "AUDIO");
+                                
+                                // Decode each track separately
+                                const inboundBuffer = Buffer.concat(inboundAudioChunks.length > 0 ? inboundAudioChunks : [Buffer.alloc(0)]);
+                                const outboundBuffer = Buffer.concat(outboundAudioChunks.length > 0 ? outboundAudioChunks : [Buffer.alloc(0)]);
+                                
+                                const inboundPcm = inboundBuffer.length > 0 ? decodeMuLawBuffer(inboundBuffer) : new Int16Array(0);
+                                const outboundPcm = outboundBuffer.length > 0 ? decodeMuLawBuffer(outboundBuffer) : new Int16Array(0);
+                                
+                                log(`🎧 Decoded: Inbound=${inboundPcm.length} samples, Outbound=${outboundPcm.length} samples`, "AUDIO");
+                                
+                                // Create stereo WAV (Left=Lead, Right=SDR)
+                                const finalWavBuffer = createStereoWav(inboundPcm, outboundPcm, 8000);
+                                
+                                const fileName = `call_${callMode}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.wav`;
+                                const { data: uploadData, error: uploadError } = await supabase
+                                    .storage
+                                    .from('audios') 
+                                    .upload(fileName, finalWavBuffer, { contentType: 'audio/wav', upsert: false });
+
+                                if (!uploadError) {
+                                    const { data: publicUrlData } = supabase.storage.from('audios').getPublicUrl(fileName);
+                                    recordingUrl = publicUrlData.publicUrl;
+                                    log(`✅ Stereo WAV uploaded: ${recordingUrl}`, "AUDIO");
+                                } else {
+                                    log(`❌ Upload Error: ${uploadError.message}`, "ERROR");
+                                }
+
+                                finalTranscription = await transcribeWithWhisper(finalWavBuffer);
+                            } catch (audioErr) {
+                                log(`❌ Bridge Audio Processing Error: ${audioErr.message}`, "ERROR");
+                            }
+                        }
+                        // AGENT MODE: Single track mono WAV
+                        else if (savedAudioChunks.length > 0) {
                             try {
                                 log(`💾 Processing ${savedAudioChunks.length} chunks...`, "AUDIO");
                                 const uLawBuffer = Buffer.concat(savedAudioChunks);
                                 const pcmBuffer = decodeMuLawBuffer(uLawBuffer);
-                                const wavHeader = createWavHeader(pcmBuffer.byteLength, 8000);
+                                const wavHeader = createWavHeader(pcmBuffer.byteLength, 8000, 1);
                                 const finalWavBuffer = Buffer.concat([wavHeader, Buffer.from(pcmBuffer.buffer)]);
 
                                 const fileName = `call_${callMode}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.wav`;
@@ -778,10 +851,6 @@ fastify.register(async (fastifyInstance) => {
                                 if (!uploadError) {
                                     const { data: publicUrlData } = supabase.storage.from('audios').getPublicUrl(fileName);
                                     recordingUrl = publicUrlData.publicUrl;
-                                }
-
-                                if (callMode === 'bridge') {
-                                    finalTranscription = await transcribeWithWhisper(finalWavBuffer);
                                 }
                             } catch (audioErr) {
                                 log(`❌ Audio Processing Error: ${audioErr.message}`, "ERROR");
