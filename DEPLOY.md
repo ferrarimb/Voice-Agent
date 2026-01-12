@@ -175,6 +175,55 @@ O sistema usa automaticamente:
 - `/incoming-call` - Para chamadas recebidas
 - `/webhook/speed-dial` - Para discagem automática (ponte SDR-Lead)
 
+#### Payload do `/webhook/speed-dial`
+
+```json
+{
+  "nome_lead": "João Silva",
+  "telefone_lead": "+5511999999999",
+  "telefone_sdr": "+5511888888888",
+  "data_agendamento": "2024-01-15 14:00",
+  "n8n_url": "https://seu-webhook.com/endpoint",
+  "TWILIO_ACCOUNT_SID": "ACxxxx",
+  "TWILIO_AUTH_TOKEN": "xxxx",
+  "TWILIO_FROM_NUMBER": "+5511993137410",
+  "OPENAI_KEY": "sk-proj-xxx (OPCIONAL)"
+}
+```
+
+**Campo `OPENAI_KEY` (opcional):**
+- Se fornecido, será usado para transcrição do áudio via Whisper API
+- Permite usar uma chave diferente da configurada no servidor
+- Se não fornecido, usa a chave padrão do servidor
+
+#### Webhook de Retorno (Fallback)
+
+O webhook de retorno é **sempre enviado** ao final da chamada, mesmo se a transcrição falhar.
+
+**Payload do webhook de retorno (modo bridge):**
+
+```json
+{
+  "assistantName": "Speed Dial Bridge",
+  "transcript": "[SDR]: Olá, tudo bem?\n\n[LEAD]: Tudo ótimo!",
+  "sdr_transcript": "Olá, tudo bem?",
+  "lead_transcript": "Tudo ótimo!",
+  "realtime_messages": [],
+  "recordingUrl": "https://xxx.supabase.co/storage/v1/object/public/audios/call_xxx.wav",
+  "timestamp": "2024-01-15T14:30:00.000Z",
+  "status": "success",
+  "mode": "bridge",
+  "source": "bridge"
+}
+```
+
+**Campos de transcrição:**
+- **`transcript`** - Transcrição combinada com labels `[SDR]` e `[LEAD]`
+- **`sdr_transcript`** - Somente o que o SDR falou
+- **`lead_transcript`** - Somente o que o Lead falou
+
+> ⚠️ Se a transcrição falhar, os campos de transcrição virão vazios mas o webhook ainda será enviado.
+
 ---
 
 ## Troubleshooting

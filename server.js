@@ -205,7 +205,8 @@ if (!OPENAI_API_KEY) {
 }
 
 // --- WHISPER API HELPER (Multipart without external deps) ---
-async function transcribeWithWhisper(audioBuffer) {
+async function transcribeWithWhisper(audioBuffer, apiKey = null) {
+    const useKey = apiKey || OPENAI_API_KEY;
     const boundary = '--------------------------' + Date.now().toString(16);
     const model = 'whisper-1';
     const language = 'pt'; // Force Portuguese
@@ -228,7 +229,7 @@ async function transcribeWithWhisper(audioBuffer) {
         const resp = await fetch('https://api.openai.com/v1/audio/transcriptions', {
             method: 'POST',
             headers: {
-                'Authorization': `Bearer ${OPENAI_API_KEY}`,
+                'Authorization': `Bearer ${useKey}`,
                 'Content-Type': `multipart/form-data; boundary=${boundary}`,
                 'Content-Length': payload.length
             },
@@ -243,6 +244,49 @@ async function transcribeWithWhisper(audioBuffer) {
         log(`❌ Whisper Error: ${e.message}`, "ERROR");
         return null;
     }
+}
+
+// --- TRANSCRIBE BRIDGE CALL (Separate SDR/LEAD channels) ---
+async function transcribeBridgeCall(inboundPcm, outboundPcm, apiKey = null) {
+    const results = { sdr: null, lead: null, combined: null };
+    
+    try {
+        // Create mono WAV for LEAD (inbound channel - left)
+        if (inboundPcm && inboundPcm.length > 0) {
+            const leadWavHeader = createWavHeader(inboundPcm.byteLength, 8000, 1);
+            const leadWavBuffer = Buffer.concat([leadWavHeader, Buffer.from(inboundPcm.buffer)]);
+            log(`🎤 Transcrevendo canal LEAD (${inboundPcm.length} samples)...`, "WHISPER");
+            results.lead = await transcribeWithWhisper(leadWavBuffer, apiKey);
+        }
+        
+        // Create mono WAV for SDR (outbound channel - right)
+        if (outboundPcm && outboundPcm.length > 0) {
+            const sdrWavHeader = createWavHeader(outboundPcm.byteLength, 8000, 1);
+            const sdrWavBuffer = Buffer.concat([sdrWavHeader, Buffer.from(outboundPcm.buffer)]);
+            log(`🎤 Transcrevendo canal SDR (${outboundPcm.length} samples)...`, "WHISPER");
+            results.sdr = await transcribeWithWhisper(sdrWavBuffer, apiKey);
+        }
+        
+        // Build combined transcript with speaker labels
+        const parts = [];
+        if (results.sdr && results.sdr.trim()) {
+            parts.push(`[SDR]: ${results.sdr.trim()}`);
+        }
+        if (results.lead && results.lead.trim()) {
+            parts.push(`[LEAD]: ${results.lead.trim()}`);
+        }
+        
+        if (parts.length > 0) {
+            results.combined = parts.join('\n\n');
+        }
+        
+        log(`✅ Transcrição Bridge completa. SDR: ${results.sdr ? 'OK' : 'Vazio'}, LEAD: ${results.lead ? 'OK' : 'Vazio'}`, "WHISPER");
+        
+    } catch (e) {
+        log(`❌ Erro na transcrição Bridge: ${e.message}`, "ERROR");
+    }
+    
+    return results;
 }
 
 // --- ELEVENLABS HELPER ---
@@ -454,7 +498,8 @@ fastify.post('/webhook/speed-dial', async (request, reply) => {
             n8n_url, 
             TWILIO_ACCOUNT_SID,
             TWILIO_AUTH_TOKEN,
-            TWILIO_FROM_NUMBER
+            TWILIO_FROM_NUMBER,
+            OPENAI_KEY
         } = body;
 
         if (!nome_lead || !telefone_lead || !telefone_sdr) {
@@ -486,7 +531,7 @@ fastify.post('/webhook/speed-dial', async (request, reply) => {
         // Apply fallback if n8n_url is missing or empty
         const finalN8nUrl = n8n_url || DEFAULT_N8N_WEBHOOK;
 
-        const callbackUrl = `${baseUrl}/connect-lead?lead_name=${encodeURIComponent(nome_lead)}&lead_phone=${encodeURIComponent(cleanLeadPhone)}&horario=${encodeURIComponent(horario)}&agendou=${agendou}&n8n_url=${encodeURIComponent(finalN8nUrl)}`;
+        const callbackUrl = `${baseUrl}/connect-lead?lead_name=${encodeURIComponent(nome_lead)}&lead_phone=${encodeURIComponent(cleanLeadPhone)}&horario=${encodeURIComponent(horario)}&agendou=${agendou}&n8n_url=${encodeURIComponent(finalN8nUrl)}${OPENAI_KEY ? `&openai_key=${encodeURIComponent(OPENAI_KEY)}` : ''}`;
 
         const auth = Buffer.from(`${accountSid}:${authToken}`).toString('base64');
         const formData = new URLSearchParams();
@@ -531,10 +576,12 @@ fastify.all('/connect-lead', async (request, reply) => {
     const raw_lead_phone = getSingleParam(queryParams.lead_phone);
     const raw_horario = getSingleParam(queryParams.horario);
     const raw_n8n_url = getSingleParam(queryParams.n8n_url);
+    const raw_openai_key = getSingleParam(queryParams.openai_key);
     
     const voice = getSingleParam(queryParams.voice) || DEFAULT_VOICE;
     const provider = getSingleParam(queryParams.provider) || 'openai';
     const xiKey = getSingleParam(queryParams.xi_api_key) || '';
+    const openaiKey = raw_openai_key || '';
     
     const lead_name = escapeXml(raw_lead_name || 'Cliente');
     const lead_phone = sanitizePhone(raw_lead_phone);
@@ -562,6 +609,7 @@ fastify.all('/connect-lead', async (request, reply) => {
                 <Parameter name="voice" value="${escapeXml(voice)}" />
                 <Parameter name="provider" value="${escapeXml(provider)}" />
                 <Parameter name="xi_api_key" value="${escapeXml(xiKey)}" />
+                <Parameter name="openai_key" value="${escapeXml(openaiKey)}" />
                 <Parameter name="source" value="bridge" />
             </Stream>
         </Start>
@@ -634,6 +682,7 @@ fastify.register(async (fastifyInstance) => {
         let elevenLabsApiKey = '';
         let customSystemInstruction = '';
         let initialGreeting = "Hello! I am ready to help you.";
+        let customOpenaiKey = ''; // Custom OpenAI key for transcription (optional)
         
         const transcripts = [];
         let savedAudioChunks = []; // Storing raw u-law buffers (for agent mode)
@@ -802,9 +851,15 @@ fastify.register(async (fastifyInstance) => {
                     if (params.xi_api_key) elevenLabsApiKey = params.xi_api_key;
                     if (params.first_message) initialGreeting = params.first_message;
                     if (params.system_instruction) customSystemInstruction = params.system_instruction;
+                    if (params.openai_key) customOpenaiKey = params.openai_key;
                     
                     // Set Source
                     if (params.source) callSource = params.source;
+                    
+                    // Log if custom OpenAI key is provided
+                    if (customOpenaiKey) {
+                        log(`🔑 Custom OpenAI Key provided for transcription`, "DEBUG");
+                    }
 
                     log(`▶️ Stream Started. Mode: ${callMode}. Voice: ${activeVoice} (${activeProvider}). Source: ${callSource}`, "TWILIO");
                     
@@ -851,14 +906,21 @@ fastify.register(async (fastifyInstance) => {
                     if (n8nUrl && n8nUrl.trim().length > 5) {
                         let recordingUrl = null;
                         let finalTranscription = null;
+                        let sdrTranscript = null;
+                        let leadTranscript = null;
 
                         // BRIDGE MODE: Process separated tracks into stereo WAV with timestamp sync
                         if (callMode === 'bridge' && (inboundAudioChunks.length > 0 || outboundAudioChunks.length > 0)) {
+                            let inboundPcm = null;
+                            let outboundPcm = null;
+                            
                             try {
                                 log(`💾 Processing BRIDGE audio: ${inboundAudioChunks.length} inbound chunks, ${outboundAudioChunks.length} outbound chunks`, "AUDIO");
                                 
                                 // Synchronize tracks using timestamps (handles delay between SDR and Lead connection)
-                                const { inboundPcm, outboundPcm } = processTimestampedChunks(inboundAudioChunks, outboundAudioChunks, 8000);
+                                const syncResult = processTimestampedChunks(inboundAudioChunks, outboundAudioChunks, 8000);
+                                inboundPcm = syncResult.inboundPcm;
+                                outboundPcm = syncResult.outboundPcm;
                                 
                                 log(`🎧 Synchronized: Inbound=${inboundPcm.length} samples, Outbound=${outboundPcm.length} samples`, "AUDIO");
                                 
@@ -878,10 +940,26 @@ fastify.register(async (fastifyInstance) => {
                                 } else {
                                     log(`❌ Upload Error: ${uploadError.message}`, "ERROR");
                                 }
-
-                                finalTranscription = await transcribeWithWhisper(finalWavBuffer);
                             } catch (audioErr) {
                                 log(`❌ Bridge Audio Processing Error: ${audioErr.message}`, "ERROR");
+                            }
+                            
+                            // TRANSCRIPTION: Use custom key if provided, separate SDR/LEAD channels
+                            // This is wrapped in its own try-catch to ensure webhook is sent even if transcription fails
+                            try {
+                                const transcriptionKey = customOpenaiKey || null;
+                                if (transcriptionKey) {
+                                    log(`🔑 Using custom OpenAI key for transcription`, "WHISPER");
+                                }
+                                
+                                if (inboundPcm && outboundPcm) {
+                                    const bridgeTranscription = await transcribeBridgeCall(inboundPcm, outboundPcm, transcriptionKey);
+                                    sdrTranscript = bridgeTranscription.sdr || null;
+                                    leadTranscript = bridgeTranscription.lead || null;
+                                    finalTranscription = bridgeTranscription.combined || null;
+                                }
+                            } catch (transcriptionErr) {
+                                log(`❌ Transcription Error (webhook will still be sent): ${transcriptionErr.message}`, "ERROR");
                             }
                         }
                         // AGENT MODE: Single track mono WAV
@@ -921,19 +999,28 @@ fastify.register(async (fastifyInstance) => {
                         log(`🚀 Sending Webhook to: ${n8nUrl}`, "WEBHOOK");
                         log(`📊 Webhook Data: mode=${callMode}, source=${callSource}, hasRecording=${!!recordingUrl}, transcriptLen=${mainTranscript.length}`, "DEBUG");
                         
+                        // Build webhook payload
+                        const webhookPayload = {
+                            assistantName: callMode === 'bridge' ? "Speed Dial Bridge" : "Twilio AI Agent",
+                            transcript: mainTranscript, 
+                            realtime_messages: transcripts, 
+                            recordingUrl: recordingUrl || "", 
+                            timestamp: new Date().toISOString(),
+                            status: 'success',
+                            mode: callMode,
+                            source: callSource || 'unknown'
+                        };
+                        
+                        // Add separated transcripts for bridge mode
+                        if (callMode === 'bridge') {
+                            webhookPayload.sdr_transcript = sdrTranscript || "";
+                            webhookPayload.lead_transcript = leadTranscript || "";
+                        }
+                        
                         fetch(n8nUrl, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                assistantName: callMode === 'bridge' ? "Speed Dial Bridge" : "Twilio AI Agent",
-                                transcript: mainTranscript, 
-                                realtime_messages: transcripts, 
-                                recordingUrl: recordingUrl || "", 
-                                timestamp: new Date().toISOString(),
-                                status: 'success',
-                                mode: callMode,
-                                source: callSource || 'unknown'
-                            })
+                            body: JSON.stringify(webhookPayload)
                         }).then(async res => {
                             if (res.ok) {
                                 log(`✅ Webhook Delivered Successfully`, "WEBHOOK");
