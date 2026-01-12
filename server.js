@@ -204,28 +204,28 @@ if (!OPENAI_API_KEY) {
     process.exit(1);
 }
 
-// --- WHISPER API HELPER (Multipart without external deps) ---
-async function transcribeWithWhisper(audioBuffer, apiKey = null) {
+// --- WHISPER API HELPER (with timestamps for chronological ordering) ---
+async function transcribeWithWhisperTimestamps(audioBuffer, apiKey = null) {
     const useKey = apiKey || OPENAI_API_KEY;
     const boundary = '--------------------------' + Date.now().toString(16);
     const model = 'whisper-1';
-    const language = 'pt'; // Force Portuguese
+    const language = 'pt';
 
-    // Construct Multipart Body
+    // Request verbose_json to get word/segment timestamps
     const parts = [
         `--${boundary}\r\nContent-Disposition: form-data; name="model"\r\n\r\n${model}\r\n`,
         `--${boundary}\r\nContent-Disposition: form-data; name="language"\r\n\r\n${language}\r\n`,
+        `--${boundary}\r\nContent-Disposition: form-data; name="response_format"\r\n\r\nverbose_json\r\n`,
+        `--${boundary}\r\nContent-Disposition: form-data; name="timestamp_granularities[]"\r\n\r\nsegment\r\n`,
         `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="recording.wav"\r\nContent-Type: audio/wav\r\n\r\n`
     ];
 
     const start = Buffer.from(parts.join(''));
     const end = Buffer.from(`\r\n--${boundary}--\r\n`);
-    
-    // Combine buffers
     const payload = Buffer.concat([start, audioBuffer, end]);
 
     try {
-        log(`🎙️ Sending ${audioBuffer.length} bytes to Whisper API...`, "WHISPER");
+        log(`🎙️ Sending ${audioBuffer.length} bytes to Whisper API (with timestamps)...`, "WHISPER");
         const resp = await fetch('https://api.openai.com/v1/audio/transcriptions', {
             method: 'POST',
             headers: {
@@ -237,50 +237,104 @@ async function transcribeWithWhisper(audioBuffer, apiKey = null) {
         });
         
         const data = await resp.json();
-        if(data.error) throw new Error(data.error.message);
-        log(`📝 Whisper Transcription: "${data.text.substring(0, 50)}..."`, "WHISPER");
-        return data.text;
+        if (data.error) throw new Error(data.error.message);
+        
+        // Return segments with timestamps
+        return {
+            text: data.text || '',
+            segments: data.segments || []
+        };
     } catch (e) {
         log(`❌ Whisper Error: ${e.message}`, "ERROR");
-        return null;
+        return { text: '', segments: [] };
     }
 }
 
-// --- TRANSCRIBE BRIDGE CALL (Separate SDR/LEAD channels) ---
-async function transcribeBridgeCall(inboundPcm, outboundPcm, apiKey = null) {
+// --- TRANSCRIBE BRIDGE CALL (Chronologically ordered with speaker labels) ---
+// CHANNEL MAPPING:
+//   - inbound = SDR (quem atende a ligação do Twilio)
+//   - outbound = BIANCA (início) + LEAD (após conectar)
+async function transcribeBridgeCall(inboundPcm, outboundPcm, apiKey = null, biancaDurationSec = 8) {
     const results = { sdr: null, lead: null, combined: null };
     
     try {
-        // Create mono WAV for LEAD (inbound channel - left)
+        let sdrSegments = [];
+        let outboundSegments = [];
+        
+        // Transcribe SDR channel (inbound) with timestamps
         if (inboundPcm && inboundPcm.length > 0) {
-            const leadWavHeader = createWavHeader(inboundPcm.byteLength, 8000, 1);
-            const leadWavBuffer = Buffer.concat([leadWavHeader, Buffer.from(inboundPcm.buffer)]);
-            log(`🎤 Transcrevendo canal LEAD (${inboundPcm.length} samples)...`, "WHISPER");
-            results.lead = await transcribeWithWhisper(leadWavBuffer, apiKey);
+            const sdrWavHeader = createWavHeader(inboundPcm.byteLength, 8000, 1);
+            const sdrWavBuffer = Buffer.concat([sdrWavHeader, Buffer.from(inboundPcm.buffer)]);
+            log(`🎤 Transcrevendo canal SDR (${inboundPcm.length} samples)...`, "WHISPER");
+            const sdrResult = await transcribeWithWhisperTimestamps(sdrWavBuffer, apiKey);
+            results.sdr = sdrResult.text;
+            sdrSegments = (sdrResult.segments || []).map(seg => ({
+                speaker: 'SDR',
+                text: seg.text.trim(),
+                start: seg.start,
+                end: seg.end
+            }));
         }
         
-        // Create mono WAV for SDR (outbound channel - right)
+        // Transcribe outbound channel (BIANCA + LEAD) with timestamps
         if (outboundPcm && outboundPcm.length > 0) {
-            const sdrWavHeader = createWavHeader(outboundPcm.byteLength, 8000, 1);
-            const sdrWavBuffer = Buffer.concat([sdrWavHeader, Buffer.from(outboundPcm.buffer)]);
-            log(`🎤 Transcrevendo canal SDR (${outboundPcm.length} samples)...`, "WHISPER");
-            results.sdr = await transcribeWithWhisper(sdrWavBuffer, apiKey);
+            const outWavHeader = createWavHeader(outboundPcm.byteLength, 8000, 1);
+            const outWavBuffer = Buffer.concat([outWavHeader, Buffer.from(outboundPcm.buffer)]);
+            log(`🎤 Transcrevendo canal BIANCA+LEAD (${outboundPcm.length} samples)...`, "WHISPER");
+            const outResult = await transcribeWithWhisperTimestamps(outWavBuffer, apiKey);
+            
+            // Split outbound into BIANCA (first ~8 seconds) and LEAD (rest)
+            // BIANCA is the automated greeting before the call connects
+            outboundSegments = (outResult.segments || []).map(seg => {
+                const speaker = seg.start < biancaDurationSec ? 'BIANCA' : 'LEAD';
+                return {
+                    speaker: speaker,
+                    text: seg.text.trim(),
+                    start: seg.start,
+                    end: seg.end
+                };
+            });
+            
+            // Extract pure LEAD text (excluding BIANCA)
+            results.lead = outboundSegments
+                .filter(s => s.speaker === 'LEAD')
+                .map(s => s.text)
+                .join(' ');
         }
         
-        // Build combined transcript with speaker labels
-        const parts = [];
-        if (results.sdr && results.sdr.trim()) {
-            parts.push(`[SDR]: ${results.sdr.trim()}`);
-        }
-        if (results.lead && results.lead.trim()) {
-            parts.push(`[LEAD]: ${results.lead.trim()}`);
+        // Merge all segments and sort chronologically
+        const allSegments = [...sdrSegments, ...outboundSegments]
+            .filter(s => s.text && s.text.length > 0)
+            .sort((a, b) => a.start - b.start);
+        
+        // Build chronologically ordered transcript
+        if (allSegments.length > 0) {
+            const lines = [];
+            let lastSpeaker = null;
+            let currentText = '';
+            
+            for (const seg of allSegments) {
+                if (seg.speaker === lastSpeaker) {
+                    // Same speaker, append to current text
+                    currentText += ' ' + seg.text;
+                } else {
+                    // New speaker, save previous and start new
+                    if (lastSpeaker && currentText.trim()) {
+                        lines.push(`[${lastSpeaker}]: ${currentText.trim()}`);
+                    }
+                    lastSpeaker = seg.speaker;
+                    currentText = seg.text;
+                }
+            }
+            // Don't forget the last segment
+            if (lastSpeaker && currentText.trim()) {
+                lines.push(`[${lastSpeaker}]: ${currentText.trim()}`);
+            }
+            
+            results.combined = lines.join('\n');
         }
         
-        if (parts.length > 0) {
-            results.combined = parts.join('\n\n');
-        }
-        
-        log(`✅ Transcrição Bridge completa. SDR: ${results.sdr ? 'OK' : 'Vazio'}, LEAD: ${results.lead ? 'OK' : 'Vazio'}`, "WHISPER");
+        log(`✅ Transcrição Bridge completa. Segments: ${allSegments.length}, SDR: ${results.sdr ? 'OK' : 'Vazio'}, LEAD: ${results.lead ? 'OK' : 'Vazio'}`, "WHISPER");
         
     } catch (e) {
         log(`❌ Erro na transcrição Bridge: ${e.message}`, "ERROR");
