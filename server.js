@@ -204,19 +204,17 @@ if (!OPENAI_API_KEY) {
     process.exit(1);
 }
 
-// --- WHISPER API HELPER (with timestamps for chronological ordering) ---
-async function transcribeWithWhisperTimestamps(audioBuffer, apiKey = null) {
+// --- TRANSCRIPTION API HELPER (using gpt-4o-transcribe for best accuracy) ---
+// gpt-4o-transcribe has significantly lower Word Error Rate than whisper-1
+async function transcribeAudio(audioBuffer, apiKey = null) {
     const useKey = apiKey || OPENAI_API_KEY;
     const boundary = '--------------------------' + Date.now().toString(16);
-    const model = 'whisper-1';
+    const model = 'gpt-4o-transcribe'; // Best accuracy model
     const language = 'pt';
 
-    // Request verbose_json to get word/segment timestamps
     const parts = [
         `--${boundary}\r\nContent-Disposition: form-data; name="model"\r\n\r\n${model}\r\n`,
         `--${boundary}\r\nContent-Disposition: form-data; name="language"\r\n\r\n${language}\r\n`,
-        `--${boundary}\r\nContent-Disposition: form-data; name="response_format"\r\n\r\nverbose_json\r\n`,
-        `--${boundary}\r\nContent-Disposition: form-data; name="timestamp_granularities[]"\r\n\r\nsegment\r\n`,
         `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="recording.wav"\r\nContent-Type: audio/wav\r\n\r\n`
     ];
 
@@ -225,7 +223,7 @@ async function transcribeWithWhisperTimestamps(audioBuffer, apiKey = null) {
     const payload = Buffer.concat([start, audioBuffer, end]);
 
     try {
-        log(`🎙️ Sending ${audioBuffer.length} bytes to Whisper API (with timestamps)...`, "WHISPER");
+        log(`🎙️ Sending ${audioBuffer.length} bytes to GPT-4o Transcribe...`, "WHISPER");
         const resp = await fetch('https://api.openai.com/v1/audio/transcriptions', {
             method: 'POST',
             headers: {
@@ -239,13 +237,12 @@ async function transcribeWithWhisperTimestamps(audioBuffer, apiKey = null) {
         const data = await resp.json();
         if (data.error) throw new Error(data.error.message);
         
-        // Return segments with timestamps
         return {
             text: data.text || '',
-            segments: data.segments || []
+            segments: []
         };
     } catch (e) {
-        log(`❌ Whisper Error: ${e.message}`, "ERROR");
+        log(`❌ Transcription Error: ${e.message}`, "ERROR");
         return { text: '', segments: [] };
     }
 }
@@ -379,7 +376,7 @@ async function transcribeBridgeCall(inboundPcm, outboundPcm, apiKey = null) {
                 const wavBuffer = Buffer.concat([wavHeader, Buffer.from(segmentPcm.buffer, segmentPcm.byteOffset, segmentPcm.byteLength)]);
                 
                 log(`🎤 [${i+1}/${segments.length}] ${seg.speaker} (${seg.startSec.toFixed(1)}s-${seg.endSec.toFixed(1)}s)...`, "WHISPER");
-                const result = await transcribeWithWhisperTimestamps(wavBuffer, apiKey);
+                const result = await transcribeAudio(wavBuffer, apiKey);
                 
                 if (result.text && result.text.trim()) {
                     transcribedSegments.push({
