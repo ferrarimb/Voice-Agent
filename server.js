@@ -851,14 +851,17 @@ fastify.register(async (fastifyInstance) => {
                     if (params.xi_api_key) elevenLabsApiKey = params.xi_api_key;
                     if (params.first_message) initialGreeting = params.first_message;
                     if (params.system_instruction) customSystemInstruction = params.system_instruction;
-                    if (params.openai_key) customOpenaiKey = params.openai_key;
+                    if (params.openai_key) {
+                        // Clean the key - remove URL encoding artifacts like leading + or spaces
+                        customOpenaiKey = params.openai_key.trim().replace(/^\+/, '');
+                    }
                     
                     // Set Source
                     if (params.source) callSource = params.source;
                     
                     // Log if custom OpenAI key is provided
                     if (customOpenaiKey) {
-                        log(`🔑 Custom OpenAI Key provided for transcription`, "DEBUG");
+                        log(`🔑 Custom OpenAI Key provided for transcription (len=${customOpenaiKey.length})`, "DEBUG");
                     }
 
                     log(`▶️ Stream Started. Mode: ${callMode}. Voice: ${activeVoice} (${activeProvider}). Source: ${callSource}`, "TWILIO");
