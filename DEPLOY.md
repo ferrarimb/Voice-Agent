@@ -188,7 +188,8 @@ O sistema usa automaticamente:
   "TWILIO_AUTH_TOKEN": "xxxx",
   "TWILIO_FROM_NUMBER": "+5511993137410",
   "OPENAI_KEY": "sk-proj-xxx (OPCIONAL)",
-  "token": "userToken123 (OPCIONAL)"
+  "token": "userToken123 (OPCIONAL)",
+  "lead_id": "lead123 (OPCIONAL)"
 }
 ```
 
@@ -200,6 +201,10 @@ O sistema usa automaticamente:
 **Campo `token` (opcional):**
 - Token do usuário para identificação no webhook de retorno (fallback)
 - Se não fornecido, o webhook de retorno enviará `"sem_token"`
+
+**Campo `lead_id` (opcional):**
+- ID do lead para identificação no webhook de retorno (fallback)
+- Se não fornecido, o webhook de retorno enviará `"sem_lead_id"`
 
 #### Webhook de Retorno (Fallback)
 
@@ -219,7 +224,8 @@ O webhook de retorno é **sempre enviado** ao final da chamada, mesmo se a trans
   "status": "success",
   "mode": "bridge",
   "source": "bridge",
-  "token": "userToken123 ou sem_token"
+  "token": "userToken123 ou sem_token",
+  "lead_id": "lead123 ou sem_lead_id"
 }
 ```
 
@@ -230,6 +236,9 @@ O webhook de retorno é **sempre enviado** ao final da chamada, mesmo se a trans
 
 **Campo `token`:**
 - Retorna o token enviado na requisição original ou `"sem_token"` se não foi fornecido
+
+**Campo `lead_id`:**
+- Retorna o lead_id enviado na requisição original ou `"sem_lead_id"` se não foi fornecido
 
 > ⚠️ Se a transcrição falhar, os campos de transcrição virão vazios mas o webhook ainda será enviado.
 
