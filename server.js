@@ -776,36 +776,45 @@ fastify.register(async (fastifyInstance) => {
                                 if (callMode === 'bridge') {
                                     finalTranscription = await transcribeWithWhisper(finalWavBuffer);
                                 }
-                            } catch (audioErr) {}
-                        }
-
-                        if (transcripts.length > 0 || recordingUrl || finalTranscription) {
-                            let mainTranscript = "";
-                            if (finalTranscription) {
-                                mainTranscript = finalTranscription;
-                            } else {
-                                mainTranscript = transcripts.map(t => `${t.role.toUpperCase()}: ${t.message}`).join('\n');
+                            } catch (audioErr) {
+                                log(`❌ Audio Processing Error: ${audioErr.message}`, "ERROR");
                             }
-
-                            log(`🚀 Sending Webhook to: ${n8nUrl}`, "WEBHOOK");
-                            fetch(n8nUrl, {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({
-                                    assistantName: callMode === 'bridge' ? "Speed Dial Bridge" : "Twilio AI Agent",
-                                    transcript: mainTranscript, 
-                                    realtime_messages: transcripts, 
-                                    recordingUrl: recordingUrl || "", 
-                                    timestamp: new Date().toISOString(),
-                                    status: 'success',
-                                    mode: callMode,
-                                    source: callSource || 'unknown'
-                                })
-                            }).then(res => {
-                                if (res.ok) log(`✅ Webhook Delivered`, "WEBHOOK");
-                                else log(`❌ Webhook HTTP Error: ${res.status}`, "WEBHOOK");
-                            }).catch(err => log(`Webhook Failed: ${err.message}`, "WEBHOOK"));
                         }
+
+                        // ALWAYS send webhook when call ends, even without transcript/recording
+                        let mainTranscript = "";
+                        if (finalTranscription) {
+                            mainTranscript = finalTranscription;
+                        } else if (transcripts.length > 0) {
+                            mainTranscript = transcripts.map(t => `${t.role.toUpperCase()}: ${t.message}`).join('\n');
+                        } else {
+                            mainTranscript = "[Sem transcrição disponível]";
+                        }
+
+                        log(`🚀 Sending Webhook to: ${n8nUrl}`, "WEBHOOK");
+                        log(`📊 Webhook Data: mode=${callMode}, source=${callSource}, hasRecording=${!!recordingUrl}, transcriptLen=${mainTranscript.length}`, "DEBUG");
+                        
+                        fetch(n8nUrl, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                assistantName: callMode === 'bridge' ? "Speed Dial Bridge" : "Twilio AI Agent",
+                                transcript: mainTranscript, 
+                                realtime_messages: transcripts, 
+                                recordingUrl: recordingUrl || "", 
+                                timestamp: new Date().toISOString(),
+                                status: 'success',
+                                mode: callMode,
+                                source: callSource || 'unknown'
+                            })
+                        }).then(async res => {
+                            if (res.ok) {
+                                log(`✅ Webhook Delivered Successfully`, "WEBHOOK");
+                            } else {
+                                const errBody = await res.text().catch(() => 'No body');
+                                log(`❌ Webhook HTTP Error: ${res.status} - ${errBody}`, "WEBHOOK");
+                            }
+                        }).catch(err => log(`❌ Webhook Network Failed: ${err.message}`, "WEBHOOK"));
                     } else {
                         log(`⚠️ No N8N URL configured. Skipping webhook.`, "WEBHOOK");
                     }
