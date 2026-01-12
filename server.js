@@ -250,91 +250,162 @@ async function transcribeWithWhisperTimestamps(audioBuffer, apiKey = null) {
     }
 }
 
-// --- TRANSCRIBE BRIDGE CALL (Chronologically ordered with speaker labels) ---
-// CHANNEL MAPPING:
-//   - inbound = SDR (quem atende a ligação do Twilio)
-//   - outbound = BIANCA (início) + LEAD (após conectar)
-async function transcribeBridgeCall(inboundPcm, outboundPcm, apiKey = null, biancaDurationSec = 8) {
+// --- AUDIO ENERGY ANALYSIS (Voice Activity Detection) ---
+function calculateRMS(samples, start, end) {
+    let sum = 0;
+    const count = end - start;
+    for (let i = start; i < end && i < samples.length; i++) {
+        sum += samples[i] * samples[i];
+    }
+    return Math.sqrt(sum / count);
+}
+
+function detectSpeakerSegments(sdrPcm, outboundPcm, sampleRate = 8000, windowMs = 300) {
+    const windowSize = Math.floor(sampleRate * windowMs / 1000); // samples per window
+    const totalSamples = Math.max(sdrPcm.length, outboundPcm.length);
+    const segments = [];
+    
+    // Energy threshold for voice activity (adjust based on testing)
+    const SILENCE_THRESHOLD = 50; // RMS threshold for silence
+    const BIANCA_END_SEC = 8; // First 8 seconds are BIANCA
+    const biancaEndSample = BIANCA_END_SEC * sampleRate;
+    
+    let currentSpeaker = null;
+    let segmentStart = 0;
+    
+    for (let pos = 0; pos < totalSamples; pos += windowSize) {
+        const windowEnd = Math.min(pos + windowSize, totalSamples);
+        const timeSeconds = pos / sampleRate;
+        
+        // Calculate RMS energy for each channel
+        const sdrEnergy = pos < sdrPcm.length ? calculateRMS(sdrPcm, pos, Math.min(windowEnd, sdrPcm.length)) : 0;
+        const outEnergy = pos < outboundPcm.length ? calculateRMS(outboundPcm, pos, Math.min(windowEnd, outboundPcm.length)) : 0;
+        
+        // Determine who is speaking in this window
+        let speaker = null;
+        if (sdrEnergy > SILENCE_THRESHOLD && sdrEnergy > outEnergy * 1.2) {
+            speaker = 'SDR';
+        } else if (outEnergy > SILENCE_THRESHOLD && outEnergy >= sdrEnergy * 0.8) {
+            // Outbound channel: BIANCA for first 8s, then LEAD
+            speaker = pos < biancaEndSample ? 'BIANCA' : 'LEAD';
+        }
+        // If both are below threshold or similar, keep silence (null)
+        
+        // Track speaker changes
+        if (speaker !== currentSpeaker) {
+            if (currentSpeaker !== null && pos > segmentStart) {
+                segments.push({
+                    speaker: currentSpeaker,
+                    startSample: segmentStart,
+                    endSample: pos,
+                    startSec: segmentStart / sampleRate,
+                    endSec: pos / sampleRate
+                });
+            }
+            currentSpeaker = speaker;
+            segmentStart = pos;
+        }
+    }
+    
+    // Don't forget the last segment
+    if (currentSpeaker !== null && totalSamples > segmentStart) {
+        segments.push({
+            speaker: currentSpeaker,
+            startSample: segmentStart,
+            endSample: totalSamples,
+            startSec: segmentStart / sampleRate,
+            endSec: totalSamples / sampleRate
+        });
+    }
+    
+    // Merge consecutive segments of the same speaker (with small gaps)
+    const mergedSegments = [];
+    for (const seg of segments) {
+        const last = mergedSegments[mergedSegments.length - 1];
+        // Merge if same speaker and gap is less than 1 second
+        if (last && last.speaker === seg.speaker && (seg.startSec - last.endSec) < 1.0) {
+            last.endSample = seg.endSample;
+            last.endSec = seg.endSec;
+        } else {
+            mergedSegments.push({ ...seg });
+        }
+    }
+    
+    return mergedSegments;
+}
+
+// --- TRANSCRIBE BRIDGE CALL (True chronological ordering via VAD) ---
+// Uses Voice Activity Detection to determine who speaks when, then transcribes in order
+async function transcribeBridgeCall(inboundPcm, outboundPcm, apiKey = null) {
     const results = { sdr: null, lead: null, combined: null };
+    const SAMPLE_RATE = 8000;
+    const MIN_SEGMENT_DURATION = 0.5; // Minimum 0.5 seconds to transcribe
     
     try {
-        let sdrSegments = [];
-        let outboundSegments = [];
-        
-        // Transcribe SDR channel (inbound) with timestamps
-        if (inboundPcm && inboundPcm.length > 0) {
-            const sdrWavHeader = createWavHeader(inboundPcm.byteLength, 8000, 1);
-            const sdrWavBuffer = Buffer.concat([sdrWavHeader, Buffer.from(inboundPcm.buffer)]);
-            log(`🎤 Transcrevendo canal SDR (${inboundPcm.length} samples)...`, "WHISPER");
-            const sdrResult = await transcribeWithWhisperTimestamps(sdrWavBuffer, apiKey);
-            results.sdr = sdrResult.text;
-            sdrSegments = (sdrResult.segments || []).map(seg => ({
-                speaker: 'SDR',
-                text: seg.text.trim(),
-                start: seg.start,
-                end: seg.end
-            }));
+        if (!inboundPcm || !outboundPcm || inboundPcm.length === 0 || outboundPcm.length === 0) {
+            log(`⚠️ Missing audio channels for bridge transcription`, "WHISPER");
+            return results;
         }
         
-        // Transcribe outbound channel (BIANCA + LEAD) with timestamps
-        if (outboundPcm && outboundPcm.length > 0) {
-            const outWavHeader = createWavHeader(outboundPcm.byteLength, 8000, 1);
-            const outWavBuffer = Buffer.concat([outWavHeader, Buffer.from(outboundPcm.buffer)]);
-            log(`🎤 Transcrevendo canal BIANCA+LEAD (${outboundPcm.length} samples)...`, "WHISPER");
-            const outResult = await transcribeWithWhisperTimestamps(outWavBuffer, apiKey);
-            
-            // Split outbound into BIANCA (first ~8 seconds) and LEAD (rest)
-            // BIANCA is the automated greeting before the call connects
-            outboundSegments = (outResult.segments || []).map(seg => {
-                const speaker = seg.start < biancaDurationSec ? 'BIANCA' : 'LEAD';
-                return {
-                    speaker: speaker,
-                    text: seg.text.trim(),
-                    start: seg.start,
-                    end: seg.end
-                };
-            });
-            
-            // Extract pure LEAD text (excluding BIANCA)
-            results.lead = outboundSegments
-                .filter(s => s.speaker === 'LEAD')
-                .map(s => s.text)
-                .join(' ');
-        }
+        // Step 1: Detect speaker segments using energy analysis
+        log(`🔍 Analisando atividade de voz em ${Math.max(inboundPcm.length, outboundPcm.length)} samples...`, "WHISPER");
+        const segments = detectSpeakerSegments(inboundPcm, outboundPcm, SAMPLE_RATE);
+        log(`📊 Detectados ${segments.length} segmentos de fala`, "WHISPER");
         
-        // Merge all segments and sort chronologically
-        const allSegments = [...sdrSegments, ...outboundSegments]
-            .filter(s => s.text && s.text.length > 0)
-            .sort((a, b) => a.start - b.start);
+        // Step 2: Transcribe each segment in chronological order
+        const transcribedSegments = [];
+        let sdrTexts = [];
+        let leadTexts = [];
         
-        // Build chronologically ordered transcript
-        if (allSegments.length > 0) {
-            const lines = [];
-            let lastSpeaker = null;
-            let currentText = '';
+        for (let i = 0; i < segments.length; i++) {
+            const seg = segments[i];
+            const duration = seg.endSec - seg.startSec;
             
-            for (const seg of allSegments) {
-                if (seg.speaker === lastSpeaker) {
-                    // Same speaker, append to current text
-                    currentText += ' ' + seg.text;
-                } else {
-                    // New speaker, save previous and start new
-                    if (lastSpeaker && currentText.trim()) {
-                        lines.push(`[${lastSpeaker}]: ${currentText.trim()}`);
-                    }
-                    lastSpeaker = seg.speaker;
-                    currentText = seg.text;
+            // Skip very short segments
+            if (duration < MIN_SEGMENT_DURATION) continue;
+            
+            // Extract audio for this segment from the appropriate channel
+            let segmentPcm;
+            if (seg.speaker === 'SDR') {
+                segmentPcm = inboundPcm.slice(seg.startSample, seg.endSample);
+            } else {
+                // BIANCA or LEAD - both from outbound channel
+                segmentPcm = outboundPcm.slice(seg.startSample, seg.endSample);
+            }
+            
+            // Create WAV and transcribe
+            if (segmentPcm.length > 0) {
+                const wavHeader = createWavHeader(segmentPcm.byteLength, SAMPLE_RATE, 1);
+                const wavBuffer = Buffer.concat([wavHeader, Buffer.from(segmentPcm.buffer, segmentPcm.byteOffset, segmentPcm.byteLength)]);
+                
+                log(`🎤 [${i+1}/${segments.length}] ${seg.speaker} (${seg.startSec.toFixed(1)}s-${seg.endSec.toFixed(1)}s)...`, "WHISPER");
+                const result = await transcribeWithWhisperTimestamps(wavBuffer, apiKey);
+                
+                if (result.text && result.text.trim()) {
+                    transcribedSegments.push({
+                        speaker: seg.speaker,
+                        text: result.text.trim(),
+                        startSec: seg.startSec
+                    });
+                    
+                    // Collect for raw transcripts
+                    if (seg.speaker === 'SDR') sdrTexts.push(result.text.trim());
+                    if (seg.speaker === 'LEAD') leadTexts.push(result.text.trim());
                 }
             }
-            // Don't forget the last segment
-            if (lastSpeaker && currentText.trim()) {
-                lines.push(`[${lastSpeaker}]: ${currentText.trim()}`);
-            }
-            
-            results.combined = lines.join('\n');
         }
         
-        log(`✅ Transcrição Bridge completa. Segments: ${allSegments.length}, SDR: ${results.sdr ? 'OK' : 'Vazio'}, LEAD: ${results.lead ? 'OK' : 'Vazio'}`, "WHISPER");
+        // Step 3: Build final transcript
+        results.sdr = sdrTexts.join(' ');
+        results.lead = leadTexts.join(' ');
+        
+        if (transcribedSegments.length > 0) {
+            results.combined = transcribedSegments
+                .map(s => `[${s.speaker}]: ${s.text}`)
+                .join('\n');
+        }
+        
+        log(`✅ Transcrição Bridge completa. ${transcribedSegments.length} segmentos transcritos.`, "WHISPER");
         
     } catch (e) {
         log(`❌ Erro na transcrição Bridge: ${e.message}`, "ERROR");
