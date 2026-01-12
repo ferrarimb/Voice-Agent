@@ -118,7 +118,60 @@ function createWavHeader(dataLength, sampleRate = 8000, numChannels = 1) {
     return buffer;
 }
 
-// 4. Create Stereo WAV from two mono tracks (interleave samples)
+// 4. Process timestamped chunks into synchronized PCM buffers
+// Returns {inboundPcm, outboundPcm} aligned by timestamp
+function processTimestampedChunks(inboundChunks, outboundChunks, sampleRate = 8000) {
+    // Each chunk has {timestamp (ms), buffer}
+    // Twilio sends ~20ms chunks at 8kHz = 160 samples per chunk
+    const samplesPerMs = sampleRate / 1000; // 8 samples per ms
+    
+    // Find the earliest timestamp across both tracks (stream start)
+    const inboundStart = inboundChunks.length > 0 ? inboundChunks[0].timestamp : Infinity;
+    const outboundStart = outboundChunks.length > 0 ? outboundChunks[0].timestamp : Infinity;
+    const globalStart = Math.min(inboundStart, outboundStart);
+    
+    // Find the latest end timestamp
+    const inboundEnd = inboundChunks.length > 0 ? inboundChunks[inboundChunks.length - 1].timestamp : 0;
+    const outboundEnd = outboundChunks.length > 0 ? outboundChunks[outboundChunks.length - 1].timestamp : 0;
+    const globalEnd = Math.max(inboundEnd, outboundEnd);
+    
+    // Calculate total duration and buffer size
+    // Add some padding for the last chunk (~20ms)
+    const totalDurationMs = globalEnd - globalStart + 20;
+    const totalSamples = Math.ceil(totalDurationMs * samplesPerMs);
+    
+    log(`🔄 Sync: GlobalStart=${globalStart}ms, InboundStart=${inboundStart}ms, OutboundStart=${outboundStart}ms, Duration=${totalDurationMs}ms`, "AUDIO");
+    
+    // Create output buffers initialized with silence (0)
+    const inboundPcm = new Int16Array(totalSamples);
+    const outboundPcm = new Int16Array(totalSamples);
+    
+    // Place inbound chunks at correct positions
+    for (const chunk of inboundChunks) {
+        const offsetMs = chunk.timestamp - globalStart;
+        const sampleOffset = Math.floor(offsetMs * samplesPerMs);
+        const decoded = decodeMuLawBuffer(chunk.buffer);
+        
+        for (let i = 0; i < decoded.length && (sampleOffset + i) < totalSamples; i++) {
+            inboundPcm[sampleOffset + i] = decoded[i];
+        }
+    }
+    
+    // Place outbound chunks at correct positions
+    for (const chunk of outboundChunks) {
+        const offsetMs = chunk.timestamp - globalStart;
+        const sampleOffset = Math.floor(offsetMs * samplesPerMs);
+        const decoded = decodeMuLawBuffer(chunk.buffer);
+        
+        for (let i = 0; i < decoded.length && (sampleOffset + i) < totalSamples; i++) {
+            outboundPcm[sampleOffset + i] = decoded[i];
+        }
+    }
+    
+    return { inboundPcm, outboundPcm };
+}
+
+// 5. Create Stereo WAV from two synchronized mono tracks (interleave samples)
 function createStereoWav(inboundPcm, outboundPcm, sampleRate = 8000) {
     // Use the longer track length, pad shorter one with silence
     const maxLength = Math.max(inboundPcm.length, outboundPcm.length);
@@ -584,8 +637,9 @@ fastify.register(async (fastifyInstance) => {
         
         const transcripts = [];
         let savedAudioChunks = []; // Storing raw u-law buffers (for agent mode)
-        let inboundAudioChunks = []; // Track: inbound (Lead) - for bridge mode
-        let outboundAudioChunks = []; // Track: outbound (SDR) - for bridge mode
+        // Bridge mode: Store chunks with timestamps for proper synchronization
+        let inboundAudioChunks = []; // [{timestamp, buffer}] - Track: inbound (Lead)
+        let outboundAudioChunks = []; // [{timestamp, buffer}] - Track: outbound (SDR)
         let openAiAudioQueue = [];
 
         log(`🔌 Socket Connection Initiated`, "TWILIO");
@@ -766,13 +820,14 @@ fastify.register(async (fastifyInstance) => {
                     if (data.media.payload) {
                         const chunkBuffer = Buffer.from(data.media.payload, 'base64');
                         const track = data.media.track; // 'inbound' or 'outbound' (only in both_tracks mode)
+                        const timestamp = parseInt(data.media.timestamp) || 0; // Twilio timestamp in ms
                         
-                        // BRIDGE MODE: Separate tracks to avoid mixing audio streams
+                        // BRIDGE MODE: Separate tracks with timestamps for sync
                         if (callMode === 'bridge' && track) {
                             if (track === 'inbound') {
-                                inboundAudioChunks.push(chunkBuffer);
+                                inboundAudioChunks.push({ timestamp, buffer: chunkBuffer });
                             } else if (track === 'outbound') {
-                                outboundAudioChunks.push(chunkBuffer);
+                                outboundAudioChunks.push({ timestamp, buffer: chunkBuffer });
                             }
                         } else {
                             // AGENT MODE: Single track
@@ -797,19 +852,15 @@ fastify.register(async (fastifyInstance) => {
                         let recordingUrl = null;
                         let finalTranscription = null;
 
-                        // BRIDGE MODE: Process separated tracks into stereo WAV
+                        // BRIDGE MODE: Process separated tracks into stereo WAV with timestamp sync
                         if (callMode === 'bridge' && (inboundAudioChunks.length > 0 || outboundAudioChunks.length > 0)) {
                             try {
                                 log(`💾 Processing BRIDGE audio: ${inboundAudioChunks.length} inbound chunks, ${outboundAudioChunks.length} outbound chunks`, "AUDIO");
                                 
-                                // Decode each track separately
-                                const inboundBuffer = Buffer.concat(inboundAudioChunks.length > 0 ? inboundAudioChunks : [Buffer.alloc(0)]);
-                                const outboundBuffer = Buffer.concat(outboundAudioChunks.length > 0 ? outboundAudioChunks : [Buffer.alloc(0)]);
+                                // Synchronize tracks using timestamps (handles delay between SDR and Lead connection)
+                                const { inboundPcm, outboundPcm } = processTimestampedChunks(inboundAudioChunks, outboundAudioChunks, 8000);
                                 
-                                const inboundPcm = inboundBuffer.length > 0 ? decodeMuLawBuffer(inboundBuffer) : new Int16Array(0);
-                                const outboundPcm = outboundBuffer.length > 0 ? decodeMuLawBuffer(outboundBuffer) : new Int16Array(0);
-                                
-                                log(`🎧 Decoded: Inbound=${inboundPcm.length} samples, Outbound=${outboundPcm.length} samples`, "AUDIO");
+                                log(`🎧 Synchronized: Inbound=${inboundPcm.length} samples, Outbound=${outboundPcm.length} samples`, "AUDIO");
                                 
                                 // Create stereo WAV (Left=Lead, Right=SDR)
                                 const finalWavBuffer = createStereoWav(inboundPcm, outboundPcm, 8000);
