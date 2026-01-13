@@ -895,41 +895,33 @@ fastify.all('/verify-sdr', async (request, reply) => {
         `;
         reply.type('text/xml').send(twiml);
     } else {
-        log(`[VERIFY-SDR] ❌ SDR NOT confirmed (${detectionReason}). Hanging up.`, "DETECTION");
+        log(`[VERIFY-SDR] ❌ SDR NOT confirmed (${detectionReason}). Recording and hanging up.`, "DETECTION");
         
-        // Send webhook notification about failed detection
-        if (n8n_url && n8n_url.trim().length > 5) {
-            const failPayload = {
-                assistantName: "Speed Dial Bridge",
-                transcript: "",
-                sdr_transcript: "",
-                lead_transcript: "",
-                realtime_messages: [],
-                recordingUrl: "",
-                timestamp: new Date().toISOString(),
-                status: 'sdr_not_answered',
-                mode: 'bridge',
-                source: 'bridge',
-                token: raw_user_token,
-                lead_id: raw_lead_id,
-                sdr_answered: false,
-                sdr_detection_reason: detectionReason,
-                sdr_detection_confidence: detectionConfidence,
-                sdr_first_words: speechResult || ''
-            };
-            
-            fetch(n8n_url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(failPayload)
-            }).catch(err => log(`❌ Webhook failed: ${err.message}`, "WEBHOOK"));
-        }
-        
+        // Even if SDR didn't answer, start recording to capture what happened
+        // This allows debugging and verification of the detection
         const twiml = `
         <Response>
+            <Start>
+                <Stream url="${wssUrl}" track="both_tracks">
+                    <Parameter name="n8n_url" value="${escapeXml(n8n_url)}" />
+                    <Parameter name="mode" value="bridge" />
+                    <Parameter name="voice" value="${escapeXml(voice)}" />
+                    <Parameter name="provider" value="${escapeXml(provider)}" />
+                    <Parameter name="xi_api_key" value="${escapeXml(xiKey)}" />
+                    <Parameter name="openai_key" value="${escapeXml(openaiKey)}" />
+                    <Parameter name="source" value="bridge" />
+                    <Parameter name="user_token" value="${escapeXml(raw_user_token)}" />
+                    <Parameter name="lead_id" value="${escapeXml(raw_lead_id)}" />
+                    <Parameter name="sdr_answered" value="false" />
+                    <Parameter name="sdr_detection_reason" value="${escapeXml(detectionReason)}" />
+                    <Parameter name="sdr_detection_confidence" value="${detectionConfidence}" />
+                    <Parameter name="sdr_first_words" value="${escapeXml(speechResult)}" />
+                </Stream>
+            </Start>
             <Say voice="Polly.Camila-Neural" language="pt-BR">
                 Não foi possível confirmar o atendimento. A ligação será encerrada.
             </Say>
+            <Pause length="2"/>
             <Hangup/>
         </Response>
         `;
