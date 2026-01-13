@@ -572,6 +572,100 @@ Seja rigoroso: na dúvida, assuma que é caixa postal para evitar conectar leads
     }
 }
 
+// --- LEAD ANSWER DETECTION (Real Human vs Noise/Voicemail) ---
+async function analyzeLeadAnswer(transcript, apiKey = null) {
+    const useKey = apiKey || OPENAI_API_KEY;
+    
+    // Quick pre-checks before calling AI
+    if (!transcript || typeof transcript !== 'string') {
+        return { isHuman: false, confidence: 1.0, reason: 'no_transcript' };
+    }
+    
+    const cleaned = cleanRingToneArtifacts(transcript);
+    if (!cleaned || cleaned.trim().length === 0) {
+        return { isHuman: false, confidence: 1.0, reason: 'empty_after_cleaning' };
+    }
+    
+    // If it's only BIANCA messages, lead didn't speak
+    if (isBiancaMessage(cleaned)) {
+        return { isHuman: false, confidence: 0.95, reason: 'only_bianca_messages' };
+    }
+    
+    // If very short and matches noise patterns, skip AI call
+    if (!isRealHumanSpeech(cleaned)) {
+        return { isHuman: false, confidence: 0.9, reason: 'noise_or_artifacts' };
+    }
+    
+    try {
+        log(`🔍 Analisando resposta do LEAD: "${transcript.substring(0, 100)}..."`, "DETECTION");
+        
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${useKey}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                model: 'gpt-4o-mini',
+                messages: [
+                    {
+                        role: 'system',
+                        content: `Você é um detector de fala humana real em transcrições de ligações telefônicas.
+
+Analise a transcrição e determine se contém FALA HUMANA REAL do lead (pessoa que recebeu a ligação).
+
+CONSIDERE HUMANO REAL:
+- Saudações naturais: "Alô", "Oi", "Fala", "Sim", "Quem é?", "Pronto"
+- Respostas conversacionais: perguntas, afirmações, negações
+- Qualquer fala que indique interação humana genuína
+
+CONSIDERE NÃO HUMANO (retorne false):
+- Mensagens de caixa postal/secretária eletrônica
+- Apenas ruídos transcritos: "bip", "beep", sons
+- Mensagens do sistema/assistente virtual (ex: "conectando com o lead")
+- Promoções automáticas de operadoras
+- Transcrições muito curtas sem sentido (menos de 2 palavras reais)
+- Música de espera
+
+Responda APENAS com JSON: {"is_human": true/false, "confidence": 0.0-1.0, "reason": "breve explicação"}`
+                    },
+                    {
+                        role: 'user',
+                        content: `Transcrição do lead: "${transcript}"`
+                    }
+                ],
+                temperature: 0.1,
+                max_tokens: 100
+            })
+        });
+        
+        const data = await response.json();
+        if (data.error) throw new Error(data.error.message);
+        
+        const content = data.choices[0]?.message?.content || '{}';
+        
+        const jsonMatch = content.match(/\{[^}]+\}/);
+        if (jsonMatch) {
+            const result = JSON.parse(jsonMatch[0]);
+            log(`✅ Detecção Lead: is_human=${result.is_human}, confidence=${result.confidence}, reason="${result.reason}"`, "DETECTION");
+            return {
+                isHuman: result.is_human === true,
+                confidence: result.confidence || 0,
+                reason: result.reason || 'unknown'
+            };
+        }
+        
+        log(`⚠️ Não foi possível parsear resposta do lead, assumindo não-humano`, "DETECTION");
+        return { isHuman: false, confidence: 0, reason: 'parse_error' };
+        
+    } catch (e) {
+        log(`❌ Erro na detecção Lead: ${e.message}`, "ERROR");
+        // Em caso de erro, usa fallback simples
+        const fallback = isRealHumanSpeech(cleaned);
+        return { isHuman: fallback, confidence: 0.5, reason: `error_fallback: ${e.message}` };
+    }
+}
+
 // --- ELEVENLABS HELPER ---
 async function streamElevenLabsAudio(text, voiceId, apiKey, twilioWs, streamSid) {
     if (!text || !text.trim()) return;
@@ -1461,22 +1555,20 @@ fastify.register(async (fastifyInstance) => {
                             webhookPayload.lead_transcript = leadTranscript || "";
                             webhookPayload.token = userToken;
                             webhookPayload.lead_id = leadId;
-                            // SDR Detection: If lead was connected (has transcript), SDR was verified as human
-                            // This is foolproof because lead only connects if /verify-sdr confirmed human
-                            const leadWasConnected = leadTranscript && leadTranscript.trim().length > 0;
-                            if (leadWasConnected) {
-                                sdrAnswered = true;
-                                if (!sdrDetectionReason || sdrDetectionReason === 'no_detection_stored') {
-                                    sdrDetectionReason = 'lead_connected';
-                                }
-                            }
-                            // SDR Detection fields
+                            
+                            // SDR Detection: Use ONLY the value from /verify-sdr (stored in Map)
+                            // DO NOT overwrite based on leadTranscript - trust the AI detection
                             webhookPayload.sdr_answered = sdrAnswered;
                             webhookPayload.sdr_detection_reason = sdrDetectionReason || "";
                             webhookPayload.sdr_detection_confidence = sdrDetectionConfidence;
                             webhookPayload.sdr_first_words = sdrFirstWords || "";
-                            // Lead Detection: true if lead spoke REAL human speech (filters out bips/noise)
-                            webhookPayload.lead_answered = isRealHumanSpeech(leadTranscript);
+                            
+                            // Lead Detection: Use AI analysis for robust detection
+                            const transcriptionKey = customOpenaiKey || null;
+                            const leadAnalysis = await analyzeLeadAnswer(leadTranscript, transcriptionKey);
+                            webhookPayload.lead_answered = leadAnalysis.isHuman;
+                            webhookPayload.lead_detection_reason = leadAnalysis.reason || "";
+                            webhookPayload.lead_detection_confidence = leadAnalysis.confidence || 0;
                         }
                         
                         fetch(n8nUrl, {
