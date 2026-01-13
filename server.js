@@ -1402,6 +1402,15 @@ fastify.register(async (fastifyInstance) => {
                             webhookPayload.lead_transcript = leadTranscript || "";
                             webhookPayload.token = userToken;
                             webhookPayload.lead_id = leadId;
+                            // SDR Detection: If lead was connected (has transcript), SDR was verified as human
+                            // This is foolproof because lead only connects if /verify-sdr confirmed human
+                            const leadWasConnected = leadTranscript && leadTranscript.trim().length > 0;
+                            if (leadWasConnected) {
+                                sdrAnswered = true;
+                                if (!sdrDetectionReason || sdrDetectionReason === 'no_detection_stored') {
+                                    sdrDetectionReason = 'lead_connected';
+                                }
+                            }
                             // SDR Detection fields
                             webhookPayload.sdr_answered = sdrAnswered;
                             webhookPayload.sdr_detection_reason = sdrDetectionReason || "";
