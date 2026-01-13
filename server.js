@@ -793,9 +793,29 @@ fastify.all('/connect-lead', async (request, reply) => {
     // Build callback URL for verification step
     const verifyUrl = `${protocol}://${host}/verify-sdr?lead_name=${encodeURIComponent(raw_lead_name || '')}&lead_phone=${encodeURIComponent(raw_lead_phone || '')}&horario=${encodeURIComponent(raw_horario || '')}&agendou=${agendou}&n8n_url=${encodeURIComponent(n8n_url)}&openai_key=${encodeURIComponent(raw_openai_key || '')}&user_token=${encodeURIComponent(raw_user_token || 'sem_token')}&lead_id=${encodeURIComponent(raw_lead_id || 'sem_lead_id')}&from_number=${encodeURIComponent(fromNumber)}`;
 
-    // Use Gather with speech recognition to capture SDR's first words
+    const wssUrl = `wss://${host}/media-stream`;
+    const voice = getSingleParam(queryParams.voice) || DEFAULT_VOICE;
+    const provider = getSingleParam(queryParams.provider) || 'openai';
+    const xiKey = getSingleParam(queryParams.xi_api_key) || '';
+    const openaiKey = raw_openai_key ? raw_openai_key.trim().replace(/^\+/, '').replace(/\+/g, '') : '';
+
+    // Start recording from the BEGINNING - captures everything including SDR's first words
     const twiml = `
     <Response>
+        <Start>
+            <Stream url="${wssUrl}" track="both_tracks">
+                <Parameter name="n8n_url" value="${escapeXml(n8n_url)}" />
+                <Parameter name="mode" value="bridge" />
+                <Parameter name="voice" value="${escapeXml(voice)}" />
+                <Parameter name="provider" value="${escapeXml(provider)}" />
+                <Parameter name="xi_api_key" value="${escapeXml(xiKey)}" />
+                <Parameter name="openai_key" value="${escapeXml(openaiKey)}" />
+                <Parameter name="source" value="bridge" />
+                <Parameter name="user_token" value="${escapeXml(raw_user_token || 'sem_token')}" />
+                <Parameter name="lead_id" value="${escapeXml(raw_lead_id || 'sem_lead_id')}" />
+                <Parameter name="sdr_answered" value="pending" />
+            </Stream>
+        </Start>
         <Say voice="Polly.Camila-Neural" language="pt-BR">
             Novo lead: ${lead_name}. ${agendou ? `Agendado para ${horario}.` : 'Pediu para falar com especialista.'}
         </Say>
@@ -862,29 +882,15 @@ fastify.all('/verify-sdr', async (request, reply) => {
     
     const wssUrl = `wss://${host}/media-stream`;
     
+    // Recording already started in /connect-lead - no need to start again
+    // Just decide: connect to Lead or hang up
+    
     if (sdrAnswered) {
         log(`[VERIFY-SDR] ✅ SDR confirmed as HUMAN. Connecting to Lead...`, "DETECTION");
         
-        // SDR is human - proceed with bridge
+        // SDR is human - proceed to dial the Lead
         const twiml = `
         <Response>
-            <Start>
-                <Stream url="${wssUrl}" track="both_tracks">
-                    <Parameter name="n8n_url" value="${escapeXml(n8n_url)}" />
-                    <Parameter name="mode" value="bridge" />
-                    <Parameter name="voice" value="${escapeXml(voice)}" />
-                    <Parameter name="provider" value="${escapeXml(provider)}" />
-                    <Parameter name="xi_api_key" value="${escapeXml(xiKey)}" />
-                    <Parameter name="openai_key" value="${escapeXml(openaiKey)}" />
-                    <Parameter name="source" value="bridge" />
-                    <Parameter name="user_token" value="${escapeXml(raw_user_token)}" />
-                    <Parameter name="lead_id" value="${escapeXml(raw_lead_id)}" />
-                    <Parameter name="sdr_answered" value="true" />
-                    <Parameter name="sdr_detection_reason" value="${escapeXml(detectionReason)}" />
-                    <Parameter name="sdr_detection_confidence" value="${detectionConfidence}" />
-                    <Parameter name="sdr_first_words" value="${escapeXml(speechResult)}" />
-                </Stream>
-            </Start>
             <Say voice="Polly.Camila-Neural" language="pt-BR">
                 Conectando com o lead agora.
             </Say>
@@ -895,29 +901,11 @@ fastify.all('/verify-sdr', async (request, reply) => {
         `;
         reply.type('text/xml').send(twiml);
     } else {
-        log(`[VERIFY-SDR] ❌ SDR NOT confirmed (${detectionReason}). Recording and hanging up.`, "DETECTION");
+        log(`[VERIFY-SDR] ❌ SDR NOT confirmed (${detectionReason}). Hanging up.`, "DETECTION");
         
-        // Even if SDR didn't answer, start recording to capture what happened
-        // This allows debugging and verification of the detection
+        // Recording is already running from /connect-lead, so full audio will be captured
         const twiml = `
         <Response>
-            <Start>
-                <Stream url="${wssUrl}" track="both_tracks">
-                    <Parameter name="n8n_url" value="${escapeXml(n8n_url)}" />
-                    <Parameter name="mode" value="bridge" />
-                    <Parameter name="voice" value="${escapeXml(voice)}" />
-                    <Parameter name="provider" value="${escapeXml(provider)}" />
-                    <Parameter name="xi_api_key" value="${escapeXml(xiKey)}" />
-                    <Parameter name="openai_key" value="${escapeXml(openaiKey)}" />
-                    <Parameter name="source" value="bridge" />
-                    <Parameter name="user_token" value="${escapeXml(raw_user_token)}" />
-                    <Parameter name="lead_id" value="${escapeXml(raw_lead_id)}" />
-                    <Parameter name="sdr_answered" value="false" />
-                    <Parameter name="sdr_detection_reason" value="${escapeXml(detectionReason)}" />
-                    <Parameter name="sdr_detection_confidence" value="${detectionConfidence}" />
-                    <Parameter name="sdr_first_words" value="${escapeXml(speechResult)}" />
-                </Stream>
-            </Start>
             <Say voice="Polly.Camila-Neural" language="pt-BR">
                 Não foi possível confirmar o atendimento. A ligação será encerrada.
             </Say>
