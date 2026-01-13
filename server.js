@@ -831,7 +831,8 @@ fastify.all('/verify-sdr', async (request, reply) => {
     const voice = getSingleParam(queryParams.voice) || DEFAULT_VOICE;
     const provider = getSingleParam(queryParams.provider) || 'openai';
     const xiKey = getSingleParam(queryParams.xi_api_key) || '';
-    const openaiKey = raw_openai_key || '';
+    // Clean the OpenAI key - remove URL encoding artifacts (+ becomes space, leading +, etc)
+    const openaiKey = raw_openai_key ? raw_openai_key.trim().replace(/^\+/, '').replace(/\+/g, '') : '';
     
     const lead_name = escapeXml(raw_lead_name || 'Cliente');
     const lead_phone = sanitizePhone(raw_lead_phone);
@@ -842,6 +843,7 @@ fastify.all('/verify-sdr', async (request, reply) => {
     const confidence = parseFloat(bodyParams.Confidence || '0');
     
     log(`[VERIFY-SDR] Speech Result: "${speechResult}" (confidence: ${confidence})`, "DETECTION");
+    log(`[VERIFY-SDR] Using OpenAI Key: ${openaiKey ? `${openaiKey.substring(0, 10)}...${openaiKey.substring(openaiKey.length - 4)}` : 'DEFAULT'}`, "DEBUG");
     
     let sdrAnswered = false;
     let detectionReason = 'no_speech';
