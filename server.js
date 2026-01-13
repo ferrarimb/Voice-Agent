@@ -1556,15 +1556,25 @@ fastify.register(async (fastifyInstance) => {
                             webhookPayload.token = userToken;
                             webhookPayload.lead_id = leadId;
                             
-                            // SDR Detection: Use ONLY the value from /verify-sdr (stored in Map)
-                            // DO NOT overwrite based on leadTranscript - trust the AI detection
+                            const transcriptionKey = customOpenaiKey || null;
+                            
+                            // SDR Detection: Use stored value from /verify-sdr Map
+                            // FALLBACK: If no_detection_stored but we have sdr_transcript, analyze it now
+                            if (sdrDetectionReason === 'no_detection_stored' && sdrTranscript && sdrTranscript.trim().length > 0) {
+                                log(`🔄 SDR Fallback: No stored detection, analyzing sdr_transcript: "${sdrTranscript.substring(0, 50)}..."`, "DETECTION");
+                                const sdrAnalysis = await analyzeSDRAnswer(sdrTranscript, transcriptionKey);
+                                sdrAnswered = sdrAnalysis.isHuman;
+                                sdrDetectionReason = sdrAnalysis.reason + '_fallback';
+                                sdrDetectionConfidence = sdrAnalysis.confidence;
+                                sdrFirstWords = sdrTranscript.substring(0, 100);
+                            }
+                            
                             webhookPayload.sdr_answered = sdrAnswered;
                             webhookPayload.sdr_detection_reason = sdrDetectionReason || "";
                             webhookPayload.sdr_detection_confidence = sdrDetectionConfidence;
                             webhookPayload.sdr_first_words = sdrFirstWords || "";
                             
                             // Lead Detection: Use AI analysis for robust detection
-                            const transcriptionKey = customOpenaiKey || null;
                             const leadAnalysis = await analyzeLeadAnswer(leadTranscript, transcriptionKey);
                             webhookPayload.lead_answered = leadAnalysis.isHuman;
                             webhookPayload.lead_detection_reason = leadAnalysis.reason || "";
