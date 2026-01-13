@@ -94,6 +94,45 @@ const cleanRingToneArtifacts = (text) => {
     return cleaned;
 };
 
+// Helper to validate if transcript contains real human speech (not just noise/beeps)
+// Returns true only if there's meaningful content after cleaning artifacts
+const isRealHumanSpeech = (text) => {
+    if (!text || typeof text !== 'string') return false;
+    
+    // Clean artifacts first
+    const cleaned = cleanRingToneArtifacts(text);
+    if (!cleaned || cleaned.length === 0) return false;
+    
+    // Filter out common noise patterns that Whisper transcribes
+    const noisePatterns = [
+        /^bip+$/i,                    // "bip", "bipi", "bipp"
+        /^beep+$/i,                   // "beep", "beeep"
+        /^\.\.+$/,                   // "...", "....."
+        /^[\s\.\,\-]+$/,             // Only punctuation/spaces
+        /^[a-z]$/i,                   // Single letter
+        /^(ah+|eh+|oh+|uh+)$/i,       // Just vowel sounds
+        /^\[.*\]$/,                   // Bracketed content like "[NOISE]"
+        /^\(.*\)$/,                   // Parenthesized content like "(bip)"
+        /^música/i,                   // "música" (background music)
+        /^som/i,                      // "som" (sound)
+        /^ruído/i                     // "ruído" (noise)
+    ];
+    
+    // Check if it matches any noise pattern
+    for (const pattern of noisePatterns) {
+        if (pattern.test(cleaned.trim())) {
+            return false;
+        }
+    }
+    
+    // Must have at least 3 characters after cleaning to be considered real speech
+    // This filters out very short artifacts like "a", "o", etc.
+    if (cleaned.length < 3) return false;
+    
+    // If we got here, it's likely real human speech
+    return true;
+}
+
 // --- AUDIO PROCESSING UTILS ---
 
 // 1. G.711 u-law to Linear PCM 16-bit Lookup Table
@@ -1436,8 +1475,8 @@ fastify.register(async (fastifyInstance) => {
                             webhookPayload.sdr_detection_reason = sdrDetectionReason || "";
                             webhookPayload.sdr_detection_confidence = sdrDetectionConfidence;
                             webhookPayload.sdr_first_words = sdrFirstWords || "";
-                            // Lead Detection: true if lead spoke (has transcript content)
-                            webhookPayload.lead_answered = leadWasConnected;
+                            // Lead Detection: true if lead spoke REAL human speech (filters out bips/noise)
+                            webhookPayload.lead_answered = isRealHumanSpeech(leadTranscript);
                         }
                         
                         fetch(n8nUrl, {

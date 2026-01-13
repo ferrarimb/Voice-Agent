@@ -276,7 +276,9 @@ O webhook de retorno é **sempre enviado** ao final da chamada, mesmo se a trans
 - **`sdr_first_words`** - Primeiras palavras detectadas do SDR
 
 **Campo de Detecção Lead:**
-- **`lead_answered`** - `true` se o lead atendeu e falou algo, `false` se o lead não atendeu ou não falou
+- **`lead_answered`** - `true` se o lead atendeu e falou **fala humana real** (filtra ruídos, bips, artefatos), `false` se o lead não atendeu ou apenas gerou ruído
+  - **Validação inteligente**: Ignora transcrições como "(bip)", "...", sons de vogais isoladas, música de fundo, etc.
+  - **Requer mínimo 3 caracteres** de conteúdo real após limpeza de artefatos
 
 > ⚠️ Se a transcrição falhar, os campos de transcrição virão vazios mas o webhook ainda será enviado.
 
