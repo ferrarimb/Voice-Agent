@@ -844,7 +844,6 @@ fastify.all('/connect-lead', async (request, reply) => {
                 <Parameter name="source" value="bridge" />
                 <Parameter name="user_token" value="${escapeXml(raw_user_token || 'sem_token')}" />
                 <Parameter name="lead_id" value="${escapeXml(raw_lead_id || 'sem_lead_id')}" />
-                <Parameter name="sdr_answered" value="pending" />
             </Stream>
         </Start>
         <Say voice="Polly.Camila-Neural" language="pt-BR">
