@@ -229,7 +229,8 @@ O webhook de retorno é **sempre enviado** ao final da chamada, mesmo se a trans
   "sdr_answered": true,
   "sdr_detection_reason": "saudacao_humana",
   "sdr_detection_confidence": 0.95,
-  "sdr_first_words": "Alô"
+  "sdr_first_words": "Alô",
+  "lead_answered": true
 }
 ```
 
@@ -252,7 +253,8 @@ O webhook de retorno é **sempre enviado** ao final da chamada, mesmo se a trans
   "sdr_answered": false,
   "sdr_detection_reason": "voicemail_detected",
   "sdr_detection_confidence": 0.9,
-  "sdr_first_words": "Você ligou para o número..."
+  "sdr_first_words": "Você ligou para o número...",
+  "lead_answered": false
 }
 ```
 
@@ -267,11 +269,14 @@ O webhook de retorno é **sempre enviado** ao final da chamada, mesmo se a trans
 **Campo `lead_id`:**
 - Retorna o lead_id enviado na requisição original ou `"sem_lead_id"` se não foi fornecido
 
-**Campos de Detecção SDR (novos):**
+**Campos de Detecção SDR:**
 - **`sdr_answered`** - `true` se confirmado humano, `false` se caixa postal/máquina
 - **`sdr_detection_reason`** - Motivo da detecção (ex: "saudacao_humana", "voicemail_detected", "timeout_no_speech")
 - **`sdr_detection_confidence`** - Confiança da detecção (0.0 a 1.0)
 - **`sdr_first_words`** - Primeiras palavras detectadas do SDR
+
+**Campo de Detecção Lead:**
+- **`lead_answered`** - `true` se o lead atendeu e falou algo, `false` se o lead não atendeu ou não falou
 
 > ⚠️ Se a transcrição falhar, os campos de transcrição virão vazios mas o webhook ainda será enviado.
 

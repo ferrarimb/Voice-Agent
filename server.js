@@ -1436,6 +1436,8 @@ fastify.register(async (fastifyInstance) => {
                             webhookPayload.sdr_detection_reason = sdrDetectionReason || "";
                             webhookPayload.sdr_detection_confidence = sdrDetectionConfidence;
                             webhookPayload.sdr_first_words = sdrFirstWords || "";
+                            // Lead Detection: true if lead spoke (has transcript content)
+                            webhookPayload.lead_answered = leadWasConnected;
                         }
                         
                         fetch(n8nUrl, {
