@@ -333,16 +333,17 @@ function detectSpeakerSegments(sdrPcm, outboundPcm, sampleRate = 8000, windowMs 
 
 // --- BIANCA MESSAGE PATTERNS ---
 // These are the known TTS messages that BIANCA speaks during a bridge call
+// Include common Whisper misrecognitions (lead -> Lyd, líder, lid, etc)
 const BIANCA_PATTERNS = [
     /novo lead/i,
     /agendado para/i,
     /pediu para falar/i,
     /diga algo para confirmar/i,
-    /conectando com o lead/i,
-    /conectando com o l[íi]der/i,  // Common misrecognition
+    /conectando com o/i,  // Broad match - "conectando com o" anything (lead, Lyd, líder, etc)
     /não foi poss[íi]vel confirmar/i,
     /a ligação será encerrada/i,
-    /especialista/i
+    /especialista/i,
+    /falar com especialista/i
 ];
 
 function isBiancaMessage(text) {
