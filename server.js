@@ -75,6 +75,25 @@ const getSingleParam = (param) => {
     return param;
 };
 
+// Helper to clean ring tone artifacts from transcription
+// Whisper sometimes transcribes ringing as "BIIIIII...", "RIIING", repeated chars, etc.
+const cleanRingToneArtifacts = (text) => {
+    if (!text) return text;
+    
+    // Remove long sequences of repeated characters (5+ of same char)
+    // e.g., "BIIIIIIIIII" -> ""
+    let cleaned = text.replace(/(.)\1{4,}/g, '');
+    
+    // Remove common ring tone transcription patterns
+    cleaned = cleaned.replace(/\b[BR]I{3,}N?G?\b/gi, ''); // BIIIII, RIIIING, etc
+    cleaned = cleaned.replace(/📞|🔔|⏏️|🔴/g, ''); // Emoji artifacts
+    
+    // Clean up multiple spaces and trim
+    cleaned = cleaned.replace(/\s+/g, ' ').trim();
+    
+    return cleaned;
+};
+
 // --- AUDIO PROCESSING UTILS ---
 
 // 1. G.711 u-law to Linear PCM 16-bit Lookup Table
@@ -427,13 +446,14 @@ async function transcribeBridgeCall(inboundPcm, outboundPcm, apiKey = null) {
             }
         }
         
-        // Step 3: Build final transcript
-        results.sdr = sdrTexts.join(' ');
-        results.lead = leadTexts.join(' ');
+        // Step 3: Build final transcript (clean ring tone artifacts)
+        results.sdr = cleanRingToneArtifacts(sdrTexts.join(' '));
+        results.lead = cleanRingToneArtifacts(leadTexts.join(' '));
         
         if (transcribedSegments.length > 0) {
             results.combined = transcribedSegments
-                .map(s => `[${s.speaker}]: ${s.text}`)
+                .map(s => `[${s.speaker}]: ${cleanRingToneArtifacts(s.text)}`)
+                .filter(line => line.split(': ')[1]?.trim()) // Remove empty lines after cleaning
                 .join('\n');
         }
         
