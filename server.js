@@ -28,6 +28,10 @@ fastify.register(fastifyWebsocket);
 // --- CONSTANTS ---
 const DEFAULT_N8N_WEBHOOK = process.env.N8N_WEBHOOK_URL || 'https://webhook-editor.abianca.com.br/webhook/retorno-new-vapi-ae75-6dfccb8f37d4';
 
+// Global Map to store SDR detection results (keyed by CallSid)
+// This allows /verify-sdr to pass detection results to the WebSocket handler
+const sdrDetectionResults = new Map();
+
 // --- Helpers ---
 const log = (msg, type = 'INFO') => {
     // FILTER: Don't log high-frequency media events to console to prevent lag
@@ -910,6 +914,28 @@ fastify.all('/verify-sdr', async (request, reply) => {
         detectionReason = 'timeout_no_speech';
     }
     
+    // Store detection result in global Map keyed by CallSid
+    // This allows the WebSocket handler to retrieve the result later
+    const callSid = bodyParams.CallSid || '';
+    if (callSid) {
+        sdrDetectionResults.set(callSid, {
+            sdrAnswered,
+            detectionReason,
+            detectionConfidence,
+            sdrFirstWords: speechResult || '',
+            timestamp: Date.now()
+        });
+        log(`[VERIFY-SDR] Stored detection result for CallSid: ${callSid} (sdrAnswered=${sdrAnswered})`, "DEBUG");
+        
+        // Clean up old entries (older than 5 minutes) to prevent memory leak
+        const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
+        for (const [key, value] of sdrDetectionResults.entries()) {
+            if (value.timestamp < fiveMinutesAgo) {
+                sdrDetectionResults.delete(key);
+            }
+        }
+    }
+    
     const wssUrl = `wss://${host}/media-stream`;
     
     // Recording already started in /connect-lead - no need to start again
@@ -1009,8 +1035,8 @@ fastify.register(async (fastifyInstance) => {
         let userToken = 'sem_token'; // Token for fallback webhook
         let leadId = 'sem_lead_id'; // Lead ID for fallback webhook
         
-        // SDR Detection fields (populated from /verify-sdr)
-        let sdrAnswered = true; // Default true since we only get here if verified
+        // SDR Detection fields (populated from /verify-sdr via global Map lookup)
+        let sdrAnswered = false; // Default false, will be set from stored detection result
         let sdrDetectionReason = '';
         let sdrDetectionConfidence = 0;
         let sdrFirstWords = '';
@@ -1196,11 +1222,24 @@ fastify.register(async (fastifyInstance) => {
                     // Set Source
                     if (params.source) callSource = params.source;
                     
-                    // SDR Detection fields (from /verify-sdr)
-                    if (params.sdr_answered) sdrAnswered = params.sdr_answered === 'true';
-                    if (params.sdr_detection_reason) sdrDetectionReason = params.sdr_detection_reason;
-                    if (params.sdr_detection_confidence) sdrDetectionConfidence = parseFloat(params.sdr_detection_confidence) || 0;
-                    if (params.sdr_first_words) sdrFirstWords = params.sdr_first_words;
+                    // SDR Detection: Look up stored result from /verify-sdr using callSid
+                    const callSid = data.start.callSid || '';
+                    if (callSid && callMode === 'bridge') {
+                        const storedDetection = sdrDetectionResults.get(callSid);
+                        if (storedDetection) {
+                            sdrAnswered = storedDetection.sdrAnswered;
+                            sdrDetectionReason = storedDetection.detectionReason || '';
+                            sdrDetectionConfidence = storedDetection.detectionConfidence || 0;
+                            sdrFirstWords = storedDetection.sdrFirstWords || '';
+                            log(`📋 Retrieved SDR detection for CallSid ${callSid}: sdrAnswered=${sdrAnswered}`, "DEBUG");
+                            // Clean up after retrieval
+                            sdrDetectionResults.delete(callSid);
+                        } else {
+                            log(`⚠️ No stored SDR detection found for CallSid ${callSid}, using default (false)`, "DEBUG");
+                            sdrAnswered = false;
+                            sdrDetectionReason = 'no_detection_stored';
+                        }
+                    }
                     
                     // Log if custom OpenAI key is provided
                     if (customOpenaiKey) {
