@@ -331,6 +331,26 @@ function detectSpeakerSegments(sdrPcm, outboundPcm, sampleRate = 8000, windowMs 
     return mergedSegments;
 }
 
+// --- BIANCA MESSAGE PATTERNS ---
+// These are the known TTS messages that BIANCA speaks during a bridge call
+const BIANCA_PATTERNS = [
+    /novo lead/i,
+    /agendado para/i,
+    /pediu para falar/i,
+    /diga algo para confirmar/i,
+    /conectando com o lead/i,
+    /conectando com o l[íi]der/i,  // Common misrecognition
+    /não foi poss[íi]vel confirmar/i,
+    /a ligação será encerrada/i,
+    /especialista/i
+];
+
+function isBiancaMessage(text) {
+    if (!text) return false;
+    const normalized = text.toLowerCase().trim();
+    return BIANCA_PATTERNS.some(pattern => pattern.test(normalized));
+}
+
 // --- TRANSCRIBE BRIDGE CALL (True chronological ordering via VAD) ---
 // Uses Voice Activity Detection to determine who speaks when, then transcribes in order
 async function transcribeBridgeCall(inboundPcm, outboundPcm, apiKey = null) {
@@ -379,15 +399,25 @@ async function transcribeBridgeCall(inboundPcm, outboundPcm, apiKey = null) {
                 const result = await transcribeAudio(wavBuffer, apiKey);
                 
                 if (result.text && result.text.trim()) {
+                    const text = result.text.trim();
+                    
+                    // Post-processing: Correct speaker based on content
+                    // If originally detected as LEAD but matches BIANCA patterns, it's BIANCA
+                    let finalSpeaker = seg.speaker;
+                    if (seg.speaker === 'LEAD' && isBiancaMessage(text)) {
+                        finalSpeaker = 'BIANCA';
+                        log(`🔄 Corrigido: "${text.substring(0, 30)}..." era LEAD, agora é BIANCA`, "WHISPER");
+                    }
+                    
                     transcribedSegments.push({
-                        speaker: seg.speaker,
-                        text: result.text.trim(),
+                        speaker: finalSpeaker,
+                        text: text,
                         startSec: seg.startSec
                     });
                     
-                    // Collect for raw transcripts
-                    if (seg.speaker === 'SDR') sdrTexts.push(result.text.trim());
-                    if (seg.speaker === 'LEAD') leadTexts.push(result.text.trim());
+                    // Collect for raw transcripts (only SDR and LEAD, not BIANCA)
+                    if (finalSpeaker === 'SDR') sdrTexts.push(text);
+                    if (finalSpeaker === 'LEAD') leadTexts.push(text);
                 }
             }
         }
