@@ -505,12 +505,59 @@ async function transcribeBridgeCall(inboundPcm, outboundPcm, apiKey = null) {
     return results;
 }
 
+// --- QUICK CONFIRMATION PATTERNS ---
+// These are common short responses that DEFINITELY indicate a human SDR answered
+// Used as a FAST PATH to avoid API call delays and potential failures
+const QUICK_CONFIRMATION_PATTERNS = [
+    /^(confirmad[oa]|confirm[oa])$/i,      // "Confirmada", "Confirmado", "Confirma", "Confirmo"
+    /^(ok|okay|ок)$/i,                      // "OK", "Okay"
+    /^(sim|s)$/i,                           // "Sim", "S"
+    /^(pode|prosseguir|prossiga)$/i,       // "Pode", "Prosseguir", "Prossiga"
+    /^(certo|cert[oa])$/i,                  // "Certo", "Certa"
+    /^(beleza|blz)$/i,                      // "Beleza", "Blz"
+    /^(tá|ta|tudo bem|tranquilo)$/i,       // "Tá", "Ta", "Tudo bem", "Tranquilo"
+    /^(pronto|pront[oa])$/i,               // "Pronto", "Pronta"
+    /^(alô|alo|oi|olá|ola|fala)$/i,       // Greetings
+    /^(manda|vai|vamos|bora)$/i,           // "Manda", "Vai", "Vamos", "Bora"
+    /^(positivo|afirmativo)$/i,            // "Positivo", "Afirmativo"
+    /^(entendi|entendido)$/i,              // "Entendi", "Entendido"
+    /^(aqui|presente)$/i,                  // "Aqui", "Presente"
+    /^(é|eh|isso)$/i,                      // "É", "Eh", "Isso"
+    /^(falo|fala eu)$/i,                   // "Falo", "Fala eu"
+];
+
+// Check if transcript matches quick confirmation patterns (FAST PATH)
+function isQuickConfirmation(transcript) {
+    if (!transcript || typeof transcript !== 'string') return false;
+    const cleaned = transcript.trim().toLowerCase();
+    // Remove punctuation for matching
+    const noPunctuation = cleaned.replace(/[.,!?;:]+/g, '').trim();
+    
+    for (const pattern of QUICK_CONFIRMATION_PATTERNS) {
+        if (pattern.test(noPunctuation)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // --- SDR ANSWER DETECTION (Voicemail vs Real Person) ---
 async function analyzeSDRAnswer(transcript, apiKey = null) {
     const useKey = apiKey || OPENAI_API_KEY;
     
+    // FAST PATH: Check for quick confirmation patterns FIRST
+    // This avoids API call delays and potential failures for obvious human responses
+    if (isQuickConfirmation(transcript)) {
+        log(`✅ [FAST PATH] Quick confirmation detected: "${transcript}"`, "DETECTION");
+        return {
+            isHuman: true,
+            confidence: 0.99,
+            reason: `quick_confirmation_pattern: "${transcript}"`
+        };
+    }
+    
     try {
-        log(`🔍 Analisando resposta do SDR: "${transcript}"`, "DETECTION");
+        log(`🔍 Analisando resposta do SDR via API: "${transcript}"`, "DETECTION");
         
         const response = await fetch('https://api.openai.com/v1/chat/completions', {
             method: 'POST',
@@ -1023,11 +1070,17 @@ fastify.all('/connect-lead', async (request, reply) => {
 
 // 2b. Verify SDR Response - Analyze if human or voicemail
 fastify.all('/verify-sdr', async (request, reply) => {
-    log(`[VERIFY-SDR] Analyzing SDR response...`, "DEBUG");
+    log(`[VERIFY-SDR] ========== INÍCIO DA VERIFICAÇÃO SDR ==========`, "DETECTION");
+    
     const queryParams = request.query || {};
     const bodyParams = request.body || {};
     const host = request.headers.host;
     const protocol = request.headers['x-forwarded-proto'] || 'https';
+    
+    // DEBUG: Log all received parameters
+    log(`[VERIFY-SDR] Query Params: ${JSON.stringify(queryParams)}`, "DEBUG");
+    log(`[VERIFY-SDR] Body Params Keys: ${Object.keys(bodyParams).join(', ')}`, "DEBUG");
+    log(`[VERIFY-SDR] Body Params Full: ${JSON.stringify(bodyParams)}`, "DEBUG");
     
     const raw_lead_name = getSingleParam(queryParams.lead_name);
     const raw_lead_phone = getSingleParam(queryParams.lead_phone);
@@ -1049,12 +1102,18 @@ fastify.all('/verify-sdr', async (request, reply) => {
     const lead_phone = sanitizePhone(raw_lead_phone);
     const n8n_url = raw_n8n_url || DEFAULT_N8N_WEBHOOK;
     
-    // Get speech result from Twilio Gather
-    const speechResult = bodyParams.SpeechResult || getSingleParam(queryParams.speech_result) || '';
+    // Get speech result from Twilio Gather - CHECK MULTIPLE POSSIBLE SOURCES
+    const speechResultFromBody = bodyParams.SpeechResult || '';
+    const speechResultFromQuery = getSingleParam(queryParams.speech_result) || '';
+    const speechResult = speechResultFromBody || speechResultFromQuery;
     const confidence = parseFloat(bodyParams.Confidence || '0');
     
-    log(`[VERIFY-SDR] Speech Result: "${speechResult}" (confidence: ${confidence})`, "DETECTION");
-    log(`[VERIFY-SDR] Using OpenAI Key: ${openaiKey ? `${openaiKey.substring(0, 10)}...${openaiKey.substring(openaiKey.length - 4)}` : 'DEFAULT'}`, "DEBUG");
+    // DETAILED LOGGING for debugging
+    log(`[VERIFY-SDR] 🎤 SpeechResult from Body: "${speechResultFromBody}"`, "DETECTION");
+    log(`[VERIFY-SDR] 🎤 SpeechResult from Query: "${speechResultFromQuery}"`, "DETECTION");
+    log(`[VERIFY-SDR] 🎤 Final SpeechResult: "${speechResult}" (confidence: ${confidence})`, "DETECTION");
+    log(`[VERIFY-SDR] 🔑 Using OpenAI Key: ${openaiKey ? `${openaiKey.substring(0, 10)}...` : 'DEFAULT'}`, "DEBUG");
+    log(`[VERIFY-SDR] 📞 Lead: ${lead_name}, Phone: ${lead_phone}`, "DEBUG");
     
     let sdrAnswered = false;
     let detectionReason = 'no_speech';
@@ -1062,14 +1121,34 @@ fastify.all('/verify-sdr', async (request, reply) => {
     
     // Analyze the speech if we got any
     if (speechResult && speechResult !== 'timeout' && speechResult.trim().length > 0) {
-        const analysis = await analyzeSDRAnswer(speechResult, openaiKey || null);
-        sdrAnswered = analysis.isHuman;
-        detectionReason = analysis.reason;
-        detectionConfidence = analysis.confidence;
+        log(`[VERIFY-SDR] ✅ Temos speech result válido, analisando...`, "DETECTION");
+        try {
+            const analysis = await analyzeSDRAnswer(speechResult, openaiKey || null);
+            sdrAnswered = analysis.isHuman;
+            detectionReason = analysis.reason;
+            detectionConfidence = analysis.confidence;
+            log(`[VERIFY-SDR] 📊 Análise completa: isHuman=${sdrAnswered}, reason="${detectionReason}", confidence=${detectionConfidence}`, "DETECTION");
+        } catch (analysisError) {
+            log(`[VERIFY-SDR] ❌ ERRO na análise: ${analysisError.message}`, "ERROR");
+            // FALLBACK: If analysis fails but we have speech, use quick confirmation check
+            if (isQuickConfirmation(speechResult)) {
+                log(`[VERIFY-SDR] 🔄 Fallback: Quick confirmation detected após erro`, "DETECTION");
+                sdrAnswered = true;
+                detectionReason = 'fallback_quick_confirmation_after_error';
+                detectionConfidence = 0.9;
+            } else {
+                detectionReason = `analysis_error: ${analysisError.message}`;
+            }
+        }
     } else if (speechResult === 'timeout') {
-        log(`[VERIFY-SDR] ⚠️ No speech detected (timeout)`, "DETECTION");
+        log(`[VERIFY-SDR] ⚠️ TIMEOUT: Nenhuma fala detectada pelo Twilio Gather`, "DETECTION");
         detectionReason = 'timeout_no_speech';
+    } else {
+        log(`[VERIFY-SDR] ⚠️ SpeechResult vazio ou inválido: "${speechResult}"`, "DETECTION");
+        detectionReason = 'empty_speech_result';
     }
+    
+    log(`[VERIFY-SDR] 🏁 DECISÃO FINAL: sdrAnswered=${sdrAnswered}, reason="${detectionReason}"`, "DETECTION");
     
     // Store detection result in global Map keyed by CallSid
     // This allows the WebSocket handler to retrieve the result later
@@ -1098,8 +1177,11 @@ fastify.all('/verify-sdr', async (request, reply) => {
     // Recording already started in /connect-lead - no need to start again
     // Just decide: connect to Lead or hang up
     
+    log(`[VERIFY-SDR] ========== GERANDO TwiML ==========`, "DETECTION");
+    
     if (sdrAnswered) {
-        log(`[VERIFY-SDR] ✅ SDR confirmed as HUMAN. Connecting to Lead...`, "DETECTION");
+        log(`[VERIFY-SDR] ✅ SDR confirmed as HUMAN. Connecting to Lead ${lead_phone}...`, "DETECTION");
+        log(`[VERIFY-SDR] 📤 TwiML: DIAL para ${lead_phone} com callerId=${fromNumber}`, "DETECTION");
         
         // SDR is human - proceed to dial the Lead
         const twiml = `
@@ -1112,9 +1194,11 @@ fastify.all('/verify-sdr', async (request, reply) => {
             </Dial>
         </Response>
         `;
+        log(`[VERIFY-SDR] ========== FIM - CONECTANDO LEAD ==========`, "DETECTION");
         reply.type('text/xml').send(twiml);
     } else {
-        log(`[VERIFY-SDR] ❌ SDR NOT confirmed (${detectionReason}). Hanging up.`, "DETECTION");
+        log(`[VERIFY-SDR] ❌ SDR NOT confirmed. Reason: ${detectionReason}`, "DETECTION");
+        log(`[VERIFY-SDR] 📤 TwiML: HANGUP (Não foi possível confirmar)`, "DETECTION");
         
         // Recording is already running from /connect-lead, so full audio will be captured
         const twiml = `
@@ -1126,6 +1210,7 @@ fastify.all('/verify-sdr', async (request, reply) => {
             <Hangup/>
         </Response>
         `;
+        log(`[VERIFY-SDR] ========== FIM - DESLIGANDO ==========`, "DETECTION");
         reply.type('text/xml').send(twiml);
     }
 });
