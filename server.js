@@ -1629,7 +1629,7 @@ fastify.register(async (fastifyInstance) => {
                             mainTranscript = "[Sem transcrição disponível]";
                         }
 
-                        log(`🚀 Sending Webhook to: ${n8nUrl}`, "WEBHOOK");
+                        log(`🚀 Sending Webhook to: ${(userToken === 'konclui') ? 'Konclui Fallback' : n8nUrl}`, "WEBHOOK");
                         log(`📊 Webhook Data: mode=${callMode}, source=${callSource}, hasRecording=${!!recordingUrl}, transcriptLen=${mainTranscript.length}`, "DEBUG");
                         
                         // Build webhook payload
@@ -1677,7 +1677,17 @@ fastify.register(async (fastifyInstance) => {
                             webhookPayload.lead_detection_confidence = leadAnalysis.confidence || 0;
                         }
                         
-                        fetch(n8nUrl, {
+                        // Determine final webhook URL based on token
+                        // If token is "konclui", use the specific Konclui fallback endpoint
+                        const finalWebhookUrl = (userToken === 'konclui') 
+                            ? 'https://n8n-webhook.mkt.konclui.com/webhook/fallback-konclui-4f25-9986-c8b8d1094d93'
+                            : n8nUrl;
+                        
+                        if (userToken === 'konclui') {
+                            log(`🔀 Token "konclui" detected - using Konclui fallback webhook`, "WEBHOOK");
+                        }
+                        
+                        fetch(finalWebhookUrl, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(webhookPayload)
