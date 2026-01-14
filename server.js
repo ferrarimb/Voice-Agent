@@ -962,7 +962,7 @@ fastify.post('/webhook/speed-dial', async (request, reply) => {
 
         const userToken = token || 'sem_token';
         const userLeadId = lead_id || 'sem_lead_id';
-        const callbackUrl = `${baseUrl}/connect-lead?lead_name=${encodeURIComponent(nome_lead)}&lead_phone=${encodeURIComponent(cleanLeadPhone)}&horario=${encodeURIComponent(horario)}&agendou=${agendou}&n8n_url=${encodeURIComponent(finalN8nUrl)}${OPENAI_KEY ? `&openai_key=${encodeURIComponent(OPENAI_KEY)}` : ''}&user_token=${encodeURIComponent(userToken)}&lead_id=${encodeURIComponent(userLeadId)}`;
+        const callbackUrl = `${baseUrl}/connect-lead?lead_name=${encodeURIComponent(nome_lead)}&lead_phone=${encodeURIComponent(cleanLeadPhone)}&horario=${encodeURIComponent(horario)}&agendou=${agendou}&n8n_url=${encodeURIComponent(finalN8nUrl)}${OPENAI_KEY ? `&openai_key=${encodeURIComponent(OPENAI_KEY)}` : ''}&user_token=${encodeURIComponent(userToken)}&lead_id=${encodeURIComponent(userLeadId)}&call_id=${encodeURIComponent(finalCallId)}`;
 
         const auth = Buffer.from(`${accountSid}:${authToken}`).toString('base64');
         const formData = new URLSearchParams();
@@ -1012,6 +1012,7 @@ fastify.all('/connect-lead', async (request, reply) => {
     const raw_openai_key = getSingleParam(queryParams.openai_key);
     const raw_user_token = getSingleParam(queryParams.user_token);
     const raw_lead_id = getSingleParam(queryParams.lead_id);
+    const raw_call_id = getSingleParam(queryParams.call_id);
     const agendou = getSingleParam(queryParams.agendou) !== 'false';
     
     const lead_name = escapeXml(raw_lead_name || 'Cliente');
@@ -1030,7 +1031,7 @@ fastify.all('/connect-lead', async (request, reply) => {
     }
     
     // Build callback URL for verification step
-    const verifyUrl = `${protocol}://${host}/verify-sdr?lead_name=${encodeURIComponent(raw_lead_name || '')}&lead_phone=${encodeURIComponent(raw_lead_phone || '')}&horario=${encodeURIComponent(raw_horario || '')}&agendou=${agendou}&n8n_url=${encodeURIComponent(n8n_url)}&openai_key=${encodeURIComponent(raw_openai_key || '')}&user_token=${encodeURIComponent(raw_user_token || 'sem_token')}&lead_id=${encodeURIComponent(raw_lead_id || 'sem_lead_id')}&from_number=${encodeURIComponent(fromNumber)}`;
+    const verifyUrl = `${protocol}://${host}/verify-sdr?lead_name=${encodeURIComponent(raw_lead_name || '')}&lead_phone=${encodeURIComponent(raw_lead_phone || '')}&horario=${encodeURIComponent(raw_horario || '')}&agendou=${agendou}&n8n_url=${encodeURIComponent(n8n_url)}&openai_key=${encodeURIComponent(raw_openai_key || '')}&user_token=${encodeURIComponent(raw_user_token || 'sem_token')}&lead_id=${encodeURIComponent(raw_lead_id || 'sem_lead_id')}&from_number=${encodeURIComponent(fromNumber)}&call_id=${encodeURIComponent(raw_call_id || '')}`;
 
     const wssUrl = `wss://${host}/media-stream`;
     const voice = getSingleParam(queryParams.voice) || DEFAULT_VOICE;
@@ -1052,6 +1053,7 @@ fastify.all('/connect-lead', async (request, reply) => {
                 <Parameter name="source" value="bridge" />
                 <Parameter name="user_token" value="${escapeXml(raw_user_token || 'sem_token')}" />
                 <Parameter name="lead_id" value="${escapeXml(raw_lead_id || 'sem_lead_id')}" />
+                <Parameter name="call_id" value="${escapeXml(raw_call_id || '')}" />
             </Stream>
         </Start>
         <Say voice="Polly.Camila-Neural" language="pt-BR">
@@ -1276,6 +1278,7 @@ fastify.register(async (fastifyInstance) => {
         let customOpenaiKey = ''; // Custom OpenAI key for transcription (optional)
         let userToken = 'sem_token'; // Token for fallback webhook
         let leadId = 'sem_lead_id'; // Lead ID for fallback webhook
+        let callId = ''; // Call ID for fallback webhook tracking
         
         // SDR Detection fields (populated from /verify-sdr via global Map lookup)
         let sdrAnswered = false; // Default false, will be set from stored detection result
@@ -1461,6 +1464,9 @@ fastify.register(async (fastifyInstance) => {
                     // Set Lead ID for webhook
                     if (params.lead_id) leadId = params.lead_id;
                     
+                    // Set Call ID for webhook tracking
+                    if (params.call_id) callId = params.call_id;
+                    
                     // Set Source
                     if (params.source) callSource = params.source;
                     
@@ -1644,6 +1650,7 @@ fastify.register(async (fastifyInstance) => {
                             webhookPayload.lead_transcript = leadTranscript || "";
                             webhookPayload.token = userToken;
                             webhookPayload.lead_id = leadId;
+                            webhookPayload.call_id = callId || "";
                             
                             const transcriptionKey = customOpenaiKey || null;
                             
