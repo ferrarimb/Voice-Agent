@@ -878,8 +878,11 @@ fastify.post('/webhook/speed-dial', async (request, reply) => {
             TWILIO_FROM_NUMBER,
             OPENAI_KEY,
             token,
-            lead_id
+            lead_id,
+            call_id
         } = body;
+        
+        const finalCallId = call_id || `${Date.now()}-${Math.random().toString(36).substring(2, 18)}`;
 
         if (!nome_lead || !telefone_lead || !telefone_sdr) {
             return reply.status(400).send({ success: false, error: "Faltando parametros obrigatorios: nome_lead, telefone_lead, telefone_sdr" });
@@ -934,15 +937,16 @@ fastify.post('/webhook/speed-dial', async (request, reply) => {
 
         if (!response.ok) {
             const err = await response.json();
-            return reply.send({ success: false, error: err.message });
+            return reply.send({ success: false, error: err.message, call_id: finalCallId });
         }
         
         const result = await response.json();
-        return reply.send({ success: true, sid: result.sid, message: "Conexão SDR Iniciada com Sucesso" });
+        return reply.send({ success: true, sid: result.sid, message: "Conexão SDR Iniciada com Sucesso", call_id: finalCallId });
 
     } catch (e) {
         log(`[WEBHOOK] Error: ${e.message}`, "ERROR");
-        return reply.status(500).send({ success: false, error: e.message });
+        const errorCallId = body?.call_id || `${Date.now()}-${Math.random().toString(36).substring(2, 18)}`;
+        return reply.status(500).send({ success: false, error: e.message, call_id: errorCallId });
     }
 });
 

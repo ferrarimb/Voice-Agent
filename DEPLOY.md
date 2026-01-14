@@ -189,7 +189,8 @@ O sistema usa automaticamente:
   "TWILIO_FROM_NUMBER": "+5511993137410",
   "OPENAI_KEY": "sk-proj-xxx (OPCIONAL)",
   "token": "userToken123 (OPCIONAL)",
-  "lead_id": "lead123 (OPCIONAL)"
+  "lead_id": "lead123 (OPCIONAL)",
+  "call_id": "1736877600000-abc123def456 (OPCIONAL)"
 }
 ```
 
@@ -205,6 +206,44 @@ O sistema usa automaticamente:
 **Campo `lead_id` (opcional):**
 - ID do lead para identificação no webhook de retorno (fallback)
 - Se não fornecido, o webhook de retorno enviará `"sem_lead_id"`
+
+**Campo `call_id` (opcional):**
+- ID único da chamada para rastreamento e correlação
+- Se fornecido, será retornado no response em todos os cenários (sucesso ou erro)
+- Se não fornecido, será gerado automaticamente no formato: `${timestamp}-${random_string}`
+  - Exemplo: `1736877600000-abc123def456`
+  - Timestamp em milissegundos + string alfanumérica aleatória de 16 caracteres
+- **Sempre retornado** no response do webhook para garantir rastreabilidade
+
+#### Response do `/webhook/speed-dial`
+
+**Sucesso:**
+```json
+{
+  "success": true,
+  "sid": "CAxxxxxxxxxxxxxxxxxxxx",
+  "message": "Conexão SDR Iniciada com Sucesso",
+  "call_id": "1736877600000-abc123def456"
+}
+```
+
+**Erro (Twilio API):**
+```json
+{
+  "success": false,
+  "error": "Invalid phone number",
+  "call_id": "1736877600000-abc123def456"
+}
+```
+
+**Erro (Exceção):**
+```json
+{
+  "success": false,
+  "error": "Connection timeout",
+  "call_id": "1736877600000-abc123def456"
+}
+```
 
 #### Webhook de Retorno (Fallback)
 
