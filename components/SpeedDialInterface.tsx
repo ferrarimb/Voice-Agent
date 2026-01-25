@@ -1,18 +1,19 @@
-
-
 import React, { useState } from 'react';
-import { User, Phone, Clock, AlertTriangle, Play, CheckCircle2, Loader2 } from 'lucide-react';
+import { User, Phone, AlertTriangle, Play, CheckCircle2, Loader2, Calendar, Key, Hash } from 'lucide-react';
 import { TwilioConfig, CallLogEntry } from '../types';
 
 export interface SpeedDialState {
-  lead: { name: string; phone: string; context: string; };
+  lead: { name: string; phone: string; dataAgendamento: string; };
   sdrPhone: string;
+  token: string;
+  leadId: string;
 }
 
 interface SpeedDialInterfaceProps {
   onCallLog: (log: CallLogEntry) => void;
   n8nWebhookUrl?: string;
   twilioConfig: TwilioConfig;
+  openaiApiKey?: string;
   savedState?: SpeedDialState;
   onStateChange?: (state: SpeedDialState) => void;
 }
@@ -44,17 +45,22 @@ const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({
   onCallLog, 
   n8nWebhookUrl, 
   twilioConfig,
+  openaiApiKey,
   savedState,
   onStateChange
 }) => {
-  const [localLead, setLocalLead] = useState({ name: '', phone: '', context: 'Imóvel Centro' });
+  const [localLead, setLocalLead] = useState({ name: '', phone: '', dataAgendamento: '' });
   const [localSdrPhone, setLocalSdrPhone] = useState(twilioConfig.fromNumber || '');
+  const [localToken, setLocalToken] = useState('');
+  const [localLeadId, setLocalLeadId] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [status, setStatus] = useState<{ type: 'success' | 'error', msg: string } | null>(null);
 
   // Use props if available, otherwise local state
   const lead = savedState ? savedState.lead : localLead;
   const sdrPhone = savedState ? savedState.sdrPhone : localSdrPhone;
+  const token = savedState ? savedState.token : localToken;
+  const leadId = savedState ? savedState.leadId : localLeadId;
 
   const updateLead = (newLead: typeof lead) => {
     if (onStateChange && savedState) {
@@ -69,6 +75,22 @@ const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({
       onStateChange({ ...savedState, sdrPhone: newPhone });
     } else {
       setLocalSdrPhone(newPhone);
+    }
+  };
+
+  const updateToken = (newToken: string) => {
+    if (onStateChange && savedState) {
+      onStateChange({ ...savedState, token: newToken });
+    } else {
+      setLocalToken(newToken);
+    }
+  };
+
+  const updateLeadId = (newLeadId: string) => {
+    if (onStateChange && savedState) {
+      onStateChange({ ...savedState, leadId: newLeadId });
+    } else {
+      setLocalLeadId(newLeadId);
     }
   };
 
@@ -102,8 +124,11 @@ const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({
       lead_name: lead.name,
       lead_phone: lead.phone,
       sdr_phone: sdrPhone,
-      horario: lead.context,
+      data_agendamento: lead.dataAgendamento,
       n8n_url: n8nWebhookUrl, 
+      token: token,
+      lead_id: leadId,
+      openai_key: openaiApiKey,
       twilio_config: {
         accountSid: twilioConfig.accountSid,
         authToken: twilioConfig.authToken,
@@ -230,15 +255,15 @@ const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({
                     </div>
 
                     <div className="space-y-2">
-                        <label className="text-xs uppercase font-bold tracking-widest text-white/30 ml-1">Contexto</label>
+                        <label className="text-xs uppercase font-bold tracking-widest text-white/30 ml-1">Data de Agendamento</label>
                         <div className="relative group">
-                            <Clock className="absolute left-4 top-3.5 text-white/30 group-focus-within:text-white/80 transition" size={18} />
+                            <Calendar className="absolute left-4 top-3.5 text-white/30 group-focus-within:text-white/80 transition" size={18} />
                             <input 
                                 type="text" 
                                 className="w-full glass-input rounded-xl py-3.5 pl-12 pr-4 text-sm font-medium placeholder:text-white/20"
-                                placeholder="Ex: 15:30"
-                                value={lead.context}
-                                onChange={(e) => updateLead({...lead, context: e.target.value})}
+                                placeholder="Ex: 2026-01-25 15:30 (deixe vazio se não agendou)"
+                                value={lead.dataAgendamento}
+                                onChange={(e) => updateLead({...lead, dataAgendamento: e.target.value})}
                             />
                         </div>
                     </div>
@@ -254,6 +279,44 @@ const SpeedDialInterface: React.FC<SpeedDialInterfaceProps> = ({
                                 value={sdrPhone}
                                 onChange={(e) => updateSdrPhone(e.target.value)}
                             />
+                        </div>
+                    </div>
+
+                    <div className="pt-6 border-t border-white/10 mt-6">
+                        <h4 className="text-xs uppercase font-bold tracking-widest text-white/40 mb-4 flex items-center gap-2">
+                            <Key size={14} /> Configurações Avançadas (Opcional)
+                        </h4>
+                        
+                        <div className="space-y-4">
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                    <label className="text-xs uppercase font-bold tracking-widest text-white/30 ml-1">Token</label>
+                                    <div className="relative group">
+                                        <Hash className="absolute left-4 top-3.5 text-white/30 group-focus-within:text-white/80 transition" size={18} />
+                                        <input 
+                                            type="text" 
+                                            className="w-full glass-input rounded-xl py-3.5 pl-12 pr-4 text-sm font-medium placeholder:text-white/20"
+                                            placeholder="Token do usuário"
+                                            value={token}
+                                            onChange={(e) => updateToken(e.target.value)}
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <label className="text-xs uppercase font-bold tracking-widest text-white/30 ml-1">Lead ID</label>
+                                    <div className="relative group">
+                                        <Hash className="absolute left-4 top-3.5 text-white/30 group-focus-within:text-white/80 transition" size={18} />
+                                        <input 
+                                            type="text" 
+                                            className="w-full glass-input rounded-xl py-3.5 pl-12 pr-4 text-sm font-medium placeholder:text-white/20"
+                                            placeholder="ID do lead"
+                                            value={leadId}
+                                            onChange={(e) => updateLeadId(e.target.value)}
+                                        />
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>

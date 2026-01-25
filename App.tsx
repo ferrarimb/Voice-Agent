@@ -30,8 +30,10 @@ const App: React.FC = () => {
   const [speedDialState, setSpeedDialState] = useState(() => {
     const saved = localStorage.getItem('speed_dial_state');
     return saved ? JSON.parse(saved) : {
-      lead: { name: '', phone: '', context: 'Imóvel Centro' },
-      sdrPhone: '' 
+      lead: { name: '', phone: '', dataAgendamento: '' },
+      sdrPhone: '',
+      token: '',
+      leadId: ''
     };
   });
 
@@ -170,6 +172,7 @@ const App: React.FC = () => {
                 twilioConfig={twilioConfig}
                 onCallLog={handleCallLog}
                 n8nWebhookUrl={appSettings.n8nWebhookUrl}
+                openaiApiKey={appSettings.openaiApiKey}
                 savedState={speedDialState}
                 onStateChange={handleSpeedDialChange}
               />

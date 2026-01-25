@@ -935,25 +935,73 @@ fastify.post('/trigger-call', async (request, reply) => {
     log(`[SPEED-DIAL] 🚀 Processando Trigger (Frontend)...`, "DEBUG");
     try {
         const body = request.body;
-        if (!body) return reply.status(400).send({ success: false, error: "Body missing" });
+        log(`[SPEED-DIAL] Body recebido: ${JSON.stringify(body ? Object.keys(body) : 'null')}`, "DEBUG");
+        
+        if (!body) {
+            log(`[SPEED-DIAL] ❌ Body missing`, "ERROR");
+            return reply.status(400).send({ success: false, error: "Body missing" });
+        }
 
-        const { lead_name, lead_phone, sdr_phone, horario, twilio_config, n8n_url } = body;
+        const { 
+            lead_name, 
+            lead_phone, 
+            sdr_phone, 
+            data_agendamento,
+            twilio_config, 
+            n8n_url,
+            token,
+            lead_id,
+            openai_key
+        } = body;
+        
+        // Gerar call_id único
+        const finalCallId = `${Date.now()}-${Math.random().toString(36).substring(2, 18)}`;
+        
+        log(`[SPEED-DIAL] Dados: lead=${lead_name}, lead_phone=${lead_phone}, sdr=${sdr_phone}`, "DEBUG");
+        log(`[SPEED-DIAL] Twilio Config presente: ${!!twilio_config}, SID: ${twilio_config?.accountSid?.substring(0,8)}...`, "DEBUG");
         
         if (!twilio_config || !twilio_config.accountSid || !twilio_config.authToken) {
-            return reply.status(400).send({ success: false, error: 'Missing Twilio Config' });
+            log(`[SPEED-DIAL] ❌ Missing Twilio Config`, "ERROR");
+            // Enviar webhook de fallback para credenciais ausentes
+            await sendSpeedDialFallbackWebhook({
+                token: token || 'sem_token',
+                n8n_url: n8n_url,
+                lead_id: lead_id || 'sem_lead_id',
+                call_id: finalCallId,
+                nome_lead: lead_name || '',
+                telefone_lead: lead_phone || '',
+                telefone_sdr: sdr_phone || '',
+                status: 'failed',
+                error_reason: 'credenciais_twilio_ausentes'
+            });
+            return reply.status(400).send({ success: false, error: 'Missing Twilio Config', call_id: finalCallId });
         }
+
+        const cleanSdrPhone = sanitizePhone(sdr_phone);
+        const cleanLeadPhone = sanitizePhone(lead_phone);
 
         // Apply fallback if n8n_url is missing or empty
         const finalN8nUrl = n8n_url || DEFAULT_N8N_WEBHOOK;
+        
+        // Se não tiver data_agendamento, lead pediu para falar com especialista
+        const agendou = !!data_agendamento;
+        const finalHorario = data_agendamento || "";
+        
+        const userToken = token || 'sem_token';
+        const userLeadId = lead_id || 'sem_lead_id';
 
         const auth = Buffer.from(`${twilio_config.accountSid}:${twilio_config.authToken}`).toString('base64');
-        const callbackUrl = `${twilio_config.baseUrl}/connect-lead?lead_name=${encodeURIComponent(lead_name)}&lead_phone=${encodeURIComponent(sanitizePhone(lead_phone))}&horario=${encodeURIComponent(horario)}&n8n_url=${encodeURIComponent(finalN8nUrl)}`;
+        const callbackUrl = `${twilio_config.baseUrl}/connect-lead?lead_name=${encodeURIComponent(lead_name)}&lead_phone=${encodeURIComponent(cleanLeadPhone)}&horario=${encodeURIComponent(finalHorario)}&agendou=${agendou}&n8n_url=${encodeURIComponent(finalN8nUrl)}${openai_key ? `&openai_key=${encodeURIComponent(openai_key)}` : ''}&user_token=${encodeURIComponent(userToken)}&lead_id=${encodeURIComponent(userLeadId)}&call_id=${encodeURIComponent(finalCallId)}`;
+
+        log(`[SPEED-DIAL] Callback URL: ${callbackUrl}`, "DEBUG");
 
         const formData = new URLSearchParams();
-        formData.append('To', sanitizePhone(sdr_phone));
+        formData.append('To', cleanSdrPhone);
         formData.append('From', twilio_config.fromNumber);
         formData.append('Url', callbackUrl); 
         formData.append('MachineDetection', 'Enable'); 
+
+        log(`[SPEED-DIAL] 📞 Chamando Twilio API para ${cleanSdrPhone}...`, "INFO");
 
         const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${twilio_config.accountSid}/Calls.json`, {
             method: 'POST',
@@ -964,16 +1012,46 @@ fastify.post('/trigger-call', async (request, reply) => {
             body: formData
         });
 
+        log(`[SPEED-DIAL] Twilio Response Status: ${response.status}`, "DEBUG");
+
         if (!response.ok) {
             const err = await response.json();
-            return reply.send({ success: false, error: err.message });
+            log(`[SPEED-DIAL] ❌ Twilio Error: ${JSON.stringify(err)}`, "ERROR");
+            // Enviar webhook de fallback para erro da API Twilio
+            await sendSpeedDialFallbackWebhook({
+                token: userToken,
+                n8n_url: finalN8nUrl,
+                lead_id: userLeadId,
+                call_id: finalCallId,
+                nome_lead: lead_name,
+                telefone_lead: cleanLeadPhone,
+                telefone_sdr: cleanSdrPhone,
+                status: 'failed',
+                error_reason: `twilio_api_error: ${err.message}`
+            });
+            return reply.send({ success: false, error: err.message || JSON.stringify(err), call_id: finalCallId });
         }
         
         const result = await response.json();
-        return reply.send({ success: true, sid: result.sid });
+        log(`[SPEED-DIAL] ✅ Chamada iniciada! SID: ${result.sid}`, "SYSTEM");
+        return reply.send({ success: true, sid: result.sid, call_id: finalCallId });
     } catch (e) {
-        log(`[TRIGGER] Error: ${e.message}`, "ERROR");
-        return reply.status(500).send({ success: false, error: e.message });
+        log(`[TRIGGER] ❌ Exception: ${e.message}`, "ERROR");
+        log(`[TRIGGER] Stack: ${e.stack}`, "ERROR");
+        const errorCallId = `${Date.now()}-${Math.random().toString(36).substring(2, 18)}`;
+        // Enviar webhook de fallback para exceção
+        await sendSpeedDialFallbackWebhook({
+            token: request.body?.token || 'sem_token',
+            n8n_url: request.body?.n8n_url,
+            lead_id: request.body?.lead_id || 'sem_lead_id',
+            call_id: errorCallId,
+            nome_lead: request.body?.lead_name || '',
+            telefone_lead: request.body?.lead_phone || '',
+            telefone_sdr: request.body?.sdr_phone || '',
+            status: 'failed',
+            error_reason: `exception: ${e.message}`
+        });
+        return reply.status(500).send({ success: false, error: e.message, call_id: errorCallId });
     }
 });
 
