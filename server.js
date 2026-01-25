@@ -27,6 +27,7 @@ fastify.register(fastifyWebsocket);
 
 // --- CONSTANTS ---
 const DEFAULT_N8N_WEBHOOK = process.env.N8N_WEBHOOK_URL || 'https://webhook-editor.abianca.com.br/webhook/retorno-new-vapi-ae75-6dfccb8f37d4';
+const KONCLUI_FALLBACK_WEBHOOK = 'https://n8n-webhook.mkt.konclui.com/webhook/fallback-konclui-4f25-9986-c8b8d1094d93';
 
 // Global Map to store SDR detection results (keyed by CallSid)
 // This allows /verify-sdr to pass detection results to the WebSocket handler
@@ -132,6 +133,75 @@ const isRealHumanSpeech = (text) => {
     // If we got here, it's likely real human speech
     return true;
 }
+
+// Helper to send fallback webhook for Speed Dial failures
+// CRITICAL: This ensures ALL speed dial attempts are logged, even failures
+const sendSpeedDialFallbackWebhook = async (params) => {
+    const {
+        token = 'sem_token',
+        n8n_url,
+        lead_id = 'sem_lead_id',
+        call_id = '',
+        nome_lead = '',
+        telefone_lead = '',
+        telefone_sdr = '',
+        status = 'failed',
+        error_reason = '',
+        sdr_answered = false,
+        lead_answered = false,
+        sdr_detection_reason = '',
+        lead_detection_reason = ''
+    } = params;
+
+    // Determine final webhook URL based on token
+    const finalWebhookUrl = (token === 'konclui') 
+        ? KONCLUI_FALLBACK_WEBHOOK
+        : (n8n_url || DEFAULT_N8N_WEBHOOK);
+
+    const webhookPayload = {
+        assistantName: "Speed Dial Bridge",
+        transcript: `[Falha no disparo: ${error_reason}]`,
+        realtime_messages: [],
+        recordingUrl: "",
+        timestamp: new Date().toISOString(),
+        status: status,
+        mode: 'bridge',
+        source: 'speed_dial_fallback',
+        sdr_transcript: "",
+        lead_transcript: "",
+        token: token,
+        lead_id: lead_id,
+        call_id: call_id,
+        nome_lead: nome_lead,
+        telefone_lead: telefone_lead,
+        telefone_sdr: telefone_sdr,
+        sdr_answered: sdr_answered,
+        lead_answered: lead_answered,
+        sdr_detection_reason: sdr_detection_reason,
+        lead_detection_reason: lead_detection_reason,
+        error_reason: error_reason
+    };
+
+    log(`🚨 [FALLBACK WEBHOOK] Enviando para: ${(token === 'konclui') ? 'Konclui' : 'N8N'} - Motivo: ${error_reason}`, "WEBHOOK");
+    log(`📊 [FALLBACK WEBHOOK] Payload: token=${token}, lead_id=${lead_id}, call_id=${call_id}`, "DEBUG");
+
+    try {
+        const res = await fetch(finalWebhookUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(webhookPayload)
+        });
+        
+        if (res.ok) {
+            log(`✅ [FALLBACK WEBHOOK] Entregue com sucesso`, "WEBHOOK");
+        } else {
+            const errBody = await res.text().catch(() => 'No body');
+            log(`❌ [FALLBACK WEBHOOK] HTTP Error: ${res.status} - ${errBody}`, "WEBHOOK");
+        }
+    } catch (err) {
+        log(`❌ [FALLBACK WEBHOOK] Network Failed: ${err.message}`, "WEBHOOK");
+    }
+};
 
 // --- AUDIO PROCESSING UTILS ---
 
@@ -932,7 +1002,19 @@ fastify.post('/webhook/speed-dial', async (request, reply) => {
         const finalCallId = call_id || `${Date.now()}-${Math.random().toString(36).substring(2, 18)}`;
 
         if (!nome_lead || !telefone_lead || !telefone_sdr) {
-            return reply.status(400).send({ success: false, error: "Faltando parametros obrigatorios: nome_lead, telefone_lead, telefone_sdr" });
+            // Enviar webhook de fallback mesmo com parâmetros faltando
+            await sendSpeedDialFallbackWebhook({
+                token: token || 'sem_token',
+                n8n_url: n8n_url,
+                lead_id: lead_id || 'sem_lead_id',
+                call_id: finalCallId,
+                nome_lead: nome_lead || '',
+                telefone_lead: telefone_lead || '',
+                telefone_sdr: telefone_sdr || '',
+                status: 'failed',
+                error_reason: 'parametros_obrigatorios_faltando'
+            });
+            return reply.status(400).send({ success: false, error: "Faltando parametros obrigatorios: nome_lead, telefone_lead, telefone_sdr", call_id: finalCallId });
         }
 
         const cleanSdrPhone = sanitizePhone(telefone_sdr);
@@ -943,9 +1025,22 @@ fastify.post('/webhook/speed-dial', async (request, reply) => {
         const fromNumber = TWILIO_FROM_NUMBER || process.env.TWILIO_FROM_NUMBER;
 
         if (!accountSid || !authToken || !fromNumber) {
+            // Enviar webhook de fallback para credenciais ausentes
+            await sendSpeedDialFallbackWebhook({
+                token: token || 'sem_token',
+                n8n_url: n8n_url,
+                lead_id: lead_id || 'sem_lead_id',
+                call_id: finalCallId,
+                nome_lead: nome_lead || '',
+                telefone_lead: telefone_lead || '',
+                telefone_sdr: telefone_sdr || '',
+                status: 'failed',
+                error_reason: 'credenciais_twilio_ausentes'
+            });
             return reply.status(500).send({ 
                 success: false, 
-                error: "Credenciais Twilio ausentes." 
+                error: "Credenciais Twilio ausentes.",
+                call_id: finalCallId
             });
         }
 
@@ -984,6 +1079,18 @@ fastify.post('/webhook/speed-dial', async (request, reply) => {
 
         if (!response.ok) {
             const err = await response.json();
+            // Enviar webhook de fallback para erro da API Twilio
+            await sendSpeedDialFallbackWebhook({
+                token: userToken,
+                n8n_url: finalN8nUrl,
+                lead_id: userLeadId,
+                call_id: finalCallId,
+                nome_lead: nome_lead,
+                telefone_lead: cleanLeadPhone,
+                telefone_sdr: cleanSdrPhone,
+                status: 'failed',
+                error_reason: `twilio_api_error: ${err.message}`
+            });
             return reply.send({ success: false, error: err.message, call_id: finalCallId });
         }
         
@@ -992,7 +1099,19 @@ fastify.post('/webhook/speed-dial', async (request, reply) => {
 
     } catch (e) {
         log(`[WEBHOOK] Error: ${e.message}`, "ERROR");
-        const errorCallId = body?.call_id || `${Date.now()}-${Math.random().toString(36).substring(2, 18)}`;
+        const errorCallId = request.body?.call_id || `${Date.now()}-${Math.random().toString(36).substring(2, 18)}`;
+        // Enviar webhook de fallback para exceção
+        await sendSpeedDialFallbackWebhook({
+            token: request.body?.token || 'sem_token',
+            n8n_url: request.body?.n8n_url,
+            lead_id: request.body?.lead_id || 'sem_lead_id',
+            call_id: errorCallId,
+            nome_lead: request.body?.nome_lead || '',
+            telefone_lead: request.body?.telefone_lead || '',
+            telefone_sdr: request.body?.telefone_sdr || '',
+            status: 'failed',
+            error_reason: `exception: ${e.message}`
+        });
         return reply.status(500).send({ success: false, error: e.message, call_id: errorCallId });
     }
 });
@@ -1026,6 +1145,20 @@ fastify.all('/connect-lead', async (request, reply) => {
     // Machine Detection from Twilio
     if (AnsweredBy && (AnsweredBy.startsWith('machine') || AnsweredBy === 'fax')) {
         log(`[CONNECT-LEAD] ❌ Machine detected by Twilio: ${AnsweredBy}`, "DETECTION");
+        // Enviar webhook de fallback para machine detection
+        await sendSpeedDialFallbackWebhook({
+            token: raw_user_token || 'sem_token',
+            n8n_url: n8n_url,
+            lead_id: raw_lead_id || 'sem_lead_id',
+            call_id: raw_call_id || '',
+            nome_lead: raw_lead_name || '',
+            telefone_lead: raw_lead_phone || '',
+            telefone_sdr: fromNumber || '',
+            status: 'failed',
+            error_reason: `machine_detection: ${AnsweredBy}`,
+            sdr_answered: false,
+            sdr_detection_reason: `twilio_machine_detection: ${AnsweredBy}`
+        });
         const twiml = `<Response><Hangup/></Response>`;
         return reply.type('text/xml').send(twiml);
     }
@@ -1091,6 +1224,7 @@ fastify.all('/verify-sdr', async (request, reply) => {
     const raw_openai_key = getSingleParam(queryParams.openai_key);
     const raw_user_token = getSingleParam(queryParams.user_token) || 'sem_token';
     const raw_lead_id = getSingleParam(queryParams.lead_id) || 'sem_lead_id';
+    const raw_call_id = getSingleParam(queryParams.call_id) || '';
     const agendou = getSingleParam(queryParams.agendou) !== 'false';
     const fromNumber = getSingleParam(queryParams.from_number) || '';
     
@@ -1201,6 +1335,21 @@ fastify.all('/verify-sdr', async (request, reply) => {
     } else {
         log(`[VERIFY-SDR] ❌ SDR NOT confirmed. Reason: ${detectionReason}`, "DETECTION");
         log(`[VERIFY-SDR] 📤 TwiML: HANGUP (Não foi possível confirmar)`, "DETECTION");
+        
+        // Enviar webhook de fallback para SDR não confirmado
+        await sendSpeedDialFallbackWebhook({
+            token: raw_user_token,
+            n8n_url: n8n_url,
+            lead_id: raw_lead_id,
+            call_id: raw_call_id,
+            nome_lead: raw_lead_name || '',
+            telefone_lead: raw_lead_phone || '',
+            telefone_sdr: fromNumber || '',
+            status: 'failed',
+            error_reason: `sdr_not_confirmed: ${detectionReason}`,
+            sdr_answered: false,
+            sdr_detection_reason: detectionReason
+        });
         
         // Recording is already running from /connect-lead, so full audio will be captured
         const twiml = `
@@ -1680,7 +1829,7 @@ fastify.register(async (fastifyInstance) => {
                         // Determine final webhook URL based on token
                         // If token is "konclui", use the specific Konclui fallback endpoint
                         const finalWebhookUrl = (userToken === 'konclui') 
-                            ? 'https://n8n-webhook.mkt.konclui.com/webhook/fallback-konclui-4f25-9986-c8b8d1094d93'
+                            ? KONCLUI_FALLBACK_WEBHOOK
                             : n8nUrl;
                         
                         if (userToken === 'konclui') {
