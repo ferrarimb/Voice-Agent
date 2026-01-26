@@ -995,13 +995,19 @@ fastify.post('/trigger-call', async (request, reply) => {
 
         log(`[SPEED-DIAL] Callback URL: ${callbackUrl}`, "DEBUG");
 
+        // Build StatusCallback URL to capture failed calls (busy, no-answer, canceled, failed)
+        const statusCallbackUrl = `${twilio_config.baseUrl}/call-status?token=${encodeURIComponent(userToken)}&lead_id=${encodeURIComponent(userLeadId)}&call_id=${encodeURIComponent(finalCallId)}&nome_lead=${encodeURIComponent(lead_name || '')}&telefone_lead=${encodeURIComponent(cleanLeadPhone)}&telefone_sdr=${encodeURIComponent(cleanSdrPhone)}&n8n_url=${encodeURIComponent(finalN8nUrl)}`;
+
         const formData = new URLSearchParams();
         formData.append('To', cleanSdrPhone);
         formData.append('From', twilio_config.fromNumber);
         formData.append('Url', callbackUrl); 
-        formData.append('MachineDetection', 'Enable'); 
+        formData.append('MachineDetection', 'Enable');
+        formData.append('StatusCallback', statusCallbackUrl);
+        formData.append('StatusCallbackEvent', 'completed');
 
         log(`[SPEED-DIAL] 📞 Chamando Twilio API para ${cleanSdrPhone}...`, "INFO");
+        log(`[SPEED-DIAL] StatusCallback URL: ${statusCallbackUrl}`, "DEBUG");
 
         const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${twilio_config.accountSid}/Calls.json`, {
             method: 'POST',
@@ -1138,13 +1144,20 @@ fastify.post('/webhook/speed-dial', async (request, reply) => {
         const callbackUrl = `${baseUrl}/connect-lead?lead_name=${encodeURIComponent(nome_lead)}&lead_phone=${encodeURIComponent(cleanLeadPhone)}&horario=${encodeURIComponent(horario)}&agendou=${agendou}&n8n_url=${encodeURIComponent(finalN8nUrl)}${OPENAI_KEY ? `&openai_key=${encodeURIComponent(OPENAI_KEY)}` : ''}&user_token=${encodeURIComponent(userToken)}&lead_id=${encodeURIComponent(userLeadId)}&call_id=${encodeURIComponent(finalCallId)}`;
 
         const auth = Buffer.from(`${accountSid}:${authToken}`).toString('base64');
+        
+        // Build StatusCallback URL to capture failed calls (busy, no-answer, canceled, failed)
+        const statusCallbackUrl = `${baseUrl}/call-status?token=${encodeURIComponent(userToken)}&lead_id=${encodeURIComponent(userLeadId)}&call_id=${encodeURIComponent(finalCallId)}&nome_lead=${encodeURIComponent(nome_lead || '')}&telefone_lead=${encodeURIComponent(cleanLeadPhone)}&telefone_sdr=${encodeURIComponent(cleanSdrPhone)}&n8n_url=${encodeURIComponent(finalN8nUrl)}`;
+        
         const formData = new URLSearchParams();
         formData.append('To', cleanSdrPhone);
         formData.append('From', fromNumber);
         formData.append('Url', callbackUrl); 
-        formData.append('MachineDetection', 'Enable'); 
+        formData.append('MachineDetection', 'Enable');
+        formData.append('StatusCallback', statusCallbackUrl);
+        formData.append('StatusCallbackEvent', 'completed');
 
         log(`[WEBHOOK] Discando para SDR ${cleanSdrPhone} sobre Lead ${nome_lead}...`, "INFO");
+        log(`[WEBHOOK] StatusCallback URL: ${statusCallbackUrl}`, "DEBUG");
 
         const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Calls.json`, {
             method: 'POST',
@@ -1442,6 +1455,54 @@ fastify.all('/verify-sdr', async (request, reply) => {
         log(`[VERIFY-SDR] ========== FIM - DESLIGANDO ==========`, "DETECTION");
         reply.type('text/xml').send(twiml);
     }
+});
+
+// 2c. Call Status Callback - Captures calls that fail before being answered (busy, no-answer, canceled, failed)
+// CRITICAL: This ensures fallback webhook is sent even when SDR doesn't answer
+fastify.all('/call-status', async (request, reply) => {
+    const bodyParams = request.body || {};
+    const queryParams = request.query || {};
+    
+    const callStatus = bodyParams.CallStatus || '';
+    const callSid = bodyParams.CallSid || '';
+    
+    // Extract our custom parameters from query string
+    const token = getSingleParam(queryParams.token) || 'sem_token';
+    const leadId = getSingleParam(queryParams.lead_id) || 'sem_lead_id';
+    const callId = getSingleParam(queryParams.call_id) || '';
+    const nomeLead = getSingleParam(queryParams.nome_lead) || '';
+    const telefoneLead = getSingleParam(queryParams.telefone_lead) || '';
+    const telefoneSdr = getSingleParam(queryParams.telefone_sdr) || '';
+    const n8nUrl = getSingleParam(queryParams.n8n_url) || DEFAULT_N8N_WEBHOOK;
+    
+    log(`[CALL-STATUS] 📞 CallSid=${callSid}, Status=${callStatus}, call_id=${callId}`, "DEBUG");
+    
+    // Only send fallback for terminal failure states where call was never answered
+    const failureStatuses = ['busy', 'no-answer', 'canceled', 'failed'];
+    
+    if (failureStatuses.includes(callStatus)) {
+        log(`[CALL-STATUS] ❌ Chamada falhou antes de ser atendida: ${callStatus}`, "WEBHOOK");
+        
+        await sendSpeedDialFallbackWebhook({
+            token: token,
+            n8n_url: n8nUrl,
+            lead_id: leadId,
+            call_id: callId,
+            nome_lead: nomeLead,
+            telefone_lead: telefoneLead,
+            telefone_sdr: telefoneSdr,
+            status: 'failed',
+            error_reason: `call_status_${callStatus}`,
+            sdr_answered: false,
+            lead_answered: false,
+            sdr_detection_reason: `twilio_call_status: ${callStatus}`
+        });
+    } else {
+        log(`[CALL-STATUS] ℹ️ Status ${callStatus} não requer fallback (chamada em progresso ou completada)`, "DEBUG");
+    }
+    
+    // Twilio expects empty 200 response
+    return reply.status(200).send('');
 });
 
 // 3. Incoming Call
