@@ -150,7 +150,9 @@ const sendSpeedDialFallbackWebhook = async (params) => {
         sdr_answered = false,
         lead_answered = false,
         sdr_detection_reason = '',
-        lead_detection_reason = ''
+        lead_detection_reason = '',
+        sip_response_code = '',
+        call_sid = ''
     } = params;
 
     // Determine final webhook URL based on token
@@ -179,7 +181,9 @@ const sendSpeedDialFallbackWebhook = async (params) => {
         lead_answered: lead_answered,
         sdr_detection_reason: sdr_detection_reason,
         lead_detection_reason: lead_detection_reason,
-        error_reason: error_reason
+        error_reason: error_reason,
+        sip_response_code: sip_response_code,
+        call_sid: call_sid
     };
 
     log(`🚨 [FALLBACK WEBHOOK] Enviando para: ${(token === 'konclui') ? 'Konclui' : 'N8N'} - Motivo: ${error_reason}`, "WEBHOOK");
@@ -1466,6 +1470,7 @@ fastify.all('/call-status', async (request, reply) => {
     // Twilio may send via GET (query) or POST (body) - check both
     const callStatus = getSingleParam(queryParams.CallStatus) || bodyParams.CallStatus || '';
     const callSid = getSingleParam(queryParams.CallSid) || bodyParams.CallSid || '';
+    const sipResponseCode = getSingleParam(queryParams.SipResponseCode) || bodyParams.SipResponseCode || '';
     
     // Extract our custom parameters from query string
     const token = getSingleParam(queryParams.token) || 'sem_token';
@@ -1476,13 +1481,13 @@ fastify.all('/call-status', async (request, reply) => {
     const telefoneSdr = getSingleParam(queryParams.telefone_sdr) || '';
     const n8nUrl = getSingleParam(queryParams.n8n_url) || DEFAULT_N8N_WEBHOOK;
     
-    log(`[CALL-STATUS] 📞 CallSid=${callSid}, Status=${callStatus}, call_id=${callId}`, "DEBUG");
+    log(`[CALL-STATUS] 📞 CallSid=${callSid}, Status=${callStatus}, SipCode=${sipResponseCode}, call_id=${callId}`, "DEBUG");
     
     // Only send fallback for terminal failure states where call was never answered
     const failureStatuses = ['busy', 'no-answer', 'canceled', 'failed'];
     
     if (failureStatuses.includes(callStatus)) {
-        log(`[CALL-STATUS] ❌ Chamada falhou antes de ser atendida: ${callStatus}`, "WEBHOOK");
+        log(`[CALL-STATUS] ❌ Chamada falhou antes de ser atendida: ${callStatus}${sipResponseCode ? ` (SIP ${sipResponseCode})` : ''}`, "WEBHOOK");
         
         await sendSpeedDialFallbackWebhook({
             token: token,
@@ -1496,7 +1501,9 @@ fastify.all('/call-status', async (request, reply) => {
             error_reason: `call_status_${callStatus}`,
             sdr_answered: false,
             lead_answered: false,
-            sdr_detection_reason: `twilio_call_status: ${callStatus}`
+            sdr_detection_reason: `twilio_call_status: ${callStatus}${sipResponseCode ? ` (SIP ${sipResponseCode})` : ''}`,
+            sip_response_code: sipResponseCode,
+            call_sid: callSid
         });
     } else {
         log(`[CALL-STATUS] ℹ️ Status ${callStatus} não requer fallback (chamada em progresso ou completada)`, "DEBUG");
