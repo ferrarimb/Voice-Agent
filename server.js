@@ -1463,8 +1463,9 @@ fastify.all('/call-status', async (request, reply) => {
     const bodyParams = request.body || {};
     const queryParams = request.query || {};
     
-    const callStatus = bodyParams.CallStatus || '';
-    const callSid = bodyParams.CallSid || '';
+    // Twilio may send via GET (query) or POST (body) - check both
+    const callStatus = getSingleParam(queryParams.CallStatus) || bodyParams.CallStatus || '';
+    const callSid = getSingleParam(queryParams.CallSid) || bodyParams.CallSid || '';
     
     // Extract our custom parameters from query string
     const token = getSingleParam(queryParams.token) || 'sem_token';
